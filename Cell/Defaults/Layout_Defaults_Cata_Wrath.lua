@@ -1,0 +1,593 @@
+local addonName, Cell = ...
+
+-- number of built-in indicators
+--! WotLK fix: was 29. The "Target Counter" indicator is deleted outright (GAP-081): it
+--! counted how many enemies target a unit by reading the names off nameplates
+--! (C_NamePlate), which does not exist on 3.3.5 in any form - on this client its engine
+--! was a stub and the options checkbox switched nothing on. The checkbox is gone too;
+--! the indices below shifted, and the record left in already-saved layouts is cleaned
+--! out by Revise.lua.
+--! WotLK feature: 29 - "Cluster", the predictive AoE-cluster counter (Indicators/Cluster.lua).
+--! WotLK feature: 30 - "Incoming Healers", the incoming-heal counter (Indicators/IncomingHealers.lua).
+Cell.defaults.builtIns = 30
+
+Cell.defaults.indicatorIndices = {
+    ["nameText"] = 1,
+    ["statusText"] = 2,
+    ["healthText"] = 3,
+    ["powerText"] = 4,
+    ["healthThresholds"] = 5,
+    ["statusIcon"] = 6,
+    ["roleIcon"] = 7,
+    ["leaderIcon"] = 8,
+    ["combatIcon"] = 9,
+    ["readyCheckIcon"] = 10,
+    ["playerRaidIcon"] = 11,
+    ["targetRaidIcon"] = 12,
+    ["aggroBlink"] = 13,
+    ["aggroBar"] = 14,
+    ["aggroBorder"] = 15,
+    ["shieldBar"] = 16,
+    ["powerWordShield"] = 17,
+    ["aoeHealing"] = 18,
+    ["externalCooldowns"] = 19,
+    ["defensiveCooldowns"] = 20,
+    ["allCooldowns"] = 21,
+    ["dispels"] = 22,
+    ["debuffs"] = 23,
+    ["raidDebuffs"] = 24,
+    ["targetedSpells"] = 25,
+    ["crowdControls"] = 26,
+    ["actions"] = 27,
+    ["missingBuffs"] = 28,
+    ["cluster"] = 29,
+    ["incomingHealers"] = 30,
+}
+
+Cell.defaults.layout = {
+    -- ["syncWith"] = "layoutName",
+    ["main"] = {
+        ["combineGroups"] = false,
+        ["sortByRole"] = false,
+        ["roleOrder"] = {"TANK", "HEALER", "DAMAGER"},
+        ["hideSelf"] = false,
+        ["size"] = {66, 46},
+        ["position"] = {},
+        ["powerSize"] = 2,
+        ["orientation"] = "vertical",
+        ["anchor"] = "TOPLEFT",
+        ["spacingX"] = 3,
+        ["spacingY"] = 3,
+        ["maxColumns"] = 8,
+        ["unitsPerColumn"] = 5,
+        ["groupSpacing"] = 0,
+    },
+    ["pet"] = {
+        --! WotLK fix: the key existed in the code but not in the defaults, so a
+        --! brand new layout had no soloEnabled at all and every reader had to
+        --! treat nil as "off" by luck. Declare it explicitly, matching raidEnabled.
+        ["soloEnabled"] = false,
+        ["partyEnabled"] = true,
+        ["raidEnabled"] = false,
+        ["sameSizeAsMain"] = true,
+        ["sameArrangementAsMain"] = true,
+        ["size"] = {66, 46},
+        ["position"] = {},
+        ["powerSize"] = 2,
+        ["orientation"] = "vertical",
+        ["anchor"] = "TOPLEFT",
+        ["spacingX"] = 3,
+        ["spacingY"] = 3,
+    },
+    ["npc"] = {
+        ["enabled"] = true,
+        ["separate"] = false,
+        ["sameSizeAsMain"] = true,
+        ["sameArrangementAsMain"] = true,
+        ["size"] = {66, 46},
+        ["position"] = {},
+        ["powerSize"] = 2,
+        ["orientation"] = "vertical",
+        ["anchor"] = "TOPLEFT",
+        ["spacingX"] = 3,
+        ["spacingY"] = 3,
+    },
+    ["spotlight"] = {
+        ["enabled"] = false,
+        ["hidePlaceholder"] = false,
+        ["units"] = {},
+        ["sameSizeAsMain"] = true,
+        ["sameArrangementAsMain"] = true,
+        ["size"] = {66, 46},
+        ["position"] = {},
+        ["powerSize"] = 2,
+        ["orientation"] = "vertical",
+        ["anchor"] = "TOPLEFT",
+        ["spacingX"] = 3,
+        ["spacingY"] = 3,
+    },
+    ["barOrientation"] = {"horizontal", false},
+    ["groupFilter"] = {true, true, true, true, true, true, true, true},
+    ["powerFilters"] = {
+        ["DEATHKNIGHT"] = {["TANK"] = true, ["DAMAGER"] = true},
+        ["DRUID"] = {["TANK"] = true, ["DAMAGER"] = true, ["HEALER"] = true},
+        ["HUNTER"] = true,
+        ["MAGE"] = true,
+        ["PALADIN"] = {["TANK"] = true, ["DAMAGER"] = true, ["HEALER"] = true},
+        ["PRIEST"] = {["DAMAGER"] = true, ["HEALER"] = true},
+        ["ROGUE"] = true,
+        ["SHAMAN"] = {["DAMAGER"] = true, ["HEALER"] = true},
+        ["WARLOCK"] = true,
+        ["WARRIOR"] = {["TANK"] = true, ["DAMAGER"] = true},
+        ["PET"] = true,
+        ["VEHICLE"] = true,
+        ["NPC"] = true,
+    },
+    ["indicators"] = {
+        {
+            ["name"] = "Name Text",
+            ["indicatorName"] = "nameText",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"CENTER", "healthBar", "CENTER", 0, 0},
+            ["frameLevel"] = 1,
+            ["font"] = {"Cell ".._G.DEFAULT, 13, "None", true},
+            ["color"] = {"custom_color", {1, 1, 1}},
+            ["vehicleNamePosition"] = {"TOP", 0},
+            ["textWidth"] = {"percentage", 0.75},
+            ["showGroupNumber"] = false,
+        }, -- 1
+        {
+            ["name"] = "Status Text",
+            ["indicatorName"] = "statusText",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"BOTTOM", 0, "justify"},
+            ["frameLevel"] = 30,
+            ["font"] = {"Cell ".._G.DEFAULT, 11, "None", true},
+            ["showTimer"] = true,
+            ["showBackground"] = true,
+            ["colors"] = {
+                ["AFK"] = {1, 0.19, 0.19, 1},
+                ["OFFLINE"] = {1, 0.19, 0.19, 1},
+                ["DEAD"] = {1, 0.19, 0.19, 1},
+                ["GHOST"] = {1, 0.19, 0.19, 1},
+                ["FEIGN"] = {1, 1, 0.12, 1},
+                ["DRINKING"] = {0.12, 0.75, 1, 1},
+                ["PENDING"] = {1, 1, 0.12, 1},
+                ["ACCEPTED"] = {0.12, 1, 0.12, 1},
+                ["DECLINED"] = {1, 0.19, 0.19, 1},
+            },
+        }, -- 2
+        {
+            ["name"] = "Health Text",
+            ["indicatorName"] = "healthText",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["position"] = {"TOP", "button", "CENTER", 0, -6},
+            ["frameLevel"] = 2,
+            ["font"] = {"Cell ".._G.DEFAULT, 10, "None", true},
+            ["format"] = {
+                ["health1"] = {
+                    ["format"] = "effective_percent",
+                    ["color"] = {"custom_color", {1, 1, 1}},
+                    ["hideIfEmptyOrFull"] = false,
+                },
+                ["health2"] = {
+                    ["format"] = "none",
+                    ["color"] = {"custom_color", {1, 1, 1}},
+                    ["hideIfEmptyOrFull"] = false,
+                    ["delimiter"] = " ",
+                },
+                ["shields"] = {
+                    ["format"] = "none",
+                    ["color"] = {"custom_color", {0, 1, 0}},
+                    ["delimiter"] = "+",
+                },
+                ["healAbsorbs"] = {
+                    ["format"] = "none",
+                    ["color"] = {"custom_color", {1, 0, 0}},
+                    ["delimiter"] = "-",
+                },
+            },
+        }, -- 3
+        {
+            ["name"] = "Power Text",
+            ["indicatorName"] = "powerText",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["position"] = {"BOTTOMRIGHT", "button", "BOTTOMRIGHT", 0, 3},
+            ["frameLevel"] = 2,
+            ["font"] = {"Cell ".._G.DEFAULT, 10, "None", true},
+            ["color"] = {"custom_color", {1, 1, 1}},
+            ["format"] = "number",
+            ["hideIfEmptyOrFull"] = true,
+            ["filters"] = {
+                ["DEATHKNIGHT"] = {["TANK"] = true, ["DAMAGER"] = true},
+                ["DRUID"] = {["TANK"] = true, ["DAMAGER"] = true, ["HEALER"] = true},
+                ["HUNTER"] = true,
+                ["MAGE"] = true,
+                ["PALADIN"] = {["TANK"] = true, ["DAMAGER"] = true, ["HEALER"] = true},
+                ["PRIEST"] = {["DAMAGER"] = true, ["HEALER"] = true},
+                ["ROGUE"] = true,
+                ["SHAMAN"] = {["DAMAGER"] = true, ["HEALER"] = true},
+                ["WARLOCK"] = true,
+                ["WARRIOR"] = {["TANK"] = true, ["DAMAGER"] = true},
+                ["PET"] = true,
+                ["VEHICLE"] = true,
+                ["NPC"] = true,
+            },
+        }, -- 4
+        {
+            ["name"] = "Health Thresholds",
+            ["indicatorName"] = "healthThresholds",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["thickness"] = 1,
+            ["thresholds"] = {
+                {0.35, {1, 0, 0, 1}},
+            },
+        }, -- 5
+        {
+            ["name"] = "Status Icon",
+            ["indicatorName"] = "statusIcon",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"TOP", "button", "TOP", 0, -3},
+            ["frameLevel"] = 10,
+            ["size"] = {18, 18},
+        }, -- 6
+        {
+            ["name"] = "Role Icon",
+            ["indicatorName"] = "roleIcon",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["hideDamager"] = false,
+            ["position"] = {"TOPLEFT", "button", "TOPLEFT", 0, 0},
+            ["size"] = {11, 11},
+            ["roleTexture"] = {"default", "Interface\\AddOns\\Cell\\Media\\Roles\\Default_TANK.tga", "Interface\\AddOns\\Cell\\Media\\Roles\\Default_HEALER.tga", "Interface\\AddOns\\Cell\\Media\\Roles\\Default_DAMAGER.tga"},
+            ["frameLevel"] = 5,
+        }, -- 7
+        {
+            ["name"] = "Leader Icon",
+            ["indicatorName"] = "leaderIcon",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["hideInCombat"] = true,
+            ["position"] = {"TOPLEFT", "button", "TOPLEFT", 1, -10},
+            ["size"] = {11, 11},
+        }, -- 8
+        {
+            ["name"] = "Combat Icon",
+            ["indicatorName"] = "combatIcon",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["position"] = {"BOTTOMRIGHT", "button", "BOTTOMRIGHT", 4, -4},
+            ["frameLevel"] = 5,
+            ["size"] = {16, 16},
+            ["onlyEnableNotInCombat"] = true,
+        }, -- 9
+        {
+            ["name"] = "Ready Check Icon",
+            ["indicatorName"] = "readyCheckIcon",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"CENTER", "button", "CENTER", 0, 0},
+            ["frameLevel"] = 100,
+            ["size"] = {16, 16},
+        }, -- 10
+        {
+            ["name"] = "Raid Icon (player)",
+            ["indicatorName"] = "playerRaidIcon",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"TOP", "button", "TOP", 0, 3},
+            ["frameLevel"] = 5,
+            ["size"] = {14, 14},
+            ["alpha"] = 0.77,
+        }, -- 11
+        {
+            ["name"] = "Raid Icon (target)",
+            ["indicatorName"] = "targetRaidIcon",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["position"] = {"TOP", "button", "TOP", -14, 3},
+            ["frameLevel"] = 5,
+            ["size"] = {14, 14},
+            ["alpha"] = 0.77,
+        }, -- 12
+        {
+            ["name"] = "Aggro (blink)",
+            ["indicatorName"] = "aggroBlink",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"TOPLEFT", "button", "TOPLEFT", 0, 0},
+            ["frameLevel"] = 7,
+            ["size"] = {11, 11},
+            --! WotLK fix: 100 - это ровно прежнее поведение (мигаем, когда юнит
+            --! набрал угрозу того, кто моба держит). Ниже - раннее предупреждение,
+            --! выше - только реальный съём. hideForTanks выключен, чтобы обновление
+            --! ничего не поменяло молча. Существующим базам ключи доберёт
+            --! RepairAgainstDefaults в Revise (он ходит по built-in индикаторам
+            --! каждый вход в игру).
+            ["threatThreshold"] = 100,
+            ["hideForTanks"] = false,
+            --! WotLK feature: "noPulse" keeps the red highlight but drops the alpha
+            --! pulse (tester request). Default false = exactly the old look, so an
+            --! update changes nothing silently; RepairAgainstDefaults back-fills it.
+            ["noPulse"] = false,
+        }, -- 13
+        {
+            ["name"] = "Aggro (bar)",
+            ["indicatorName"] = "aggroBar",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"BOTTOMLEFT", "button", "TOPLEFT", 0, -1},
+            ["frameLevel"] = 1,
+            ["size"] = {20, 4},
+        }, -- 14
+        {
+            ["name"] = "Aggro (border)",
+            ["indicatorName"] = "aggroBorder",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["frameLevel"] = 3,
+            ["thickness"] = 2,
+            --! WotLK fix: свой порог и свой "не показывать танков" - рамка и мигание
+            --! это два разных индикатора, включают их независимо. См. 13.
+            ["threatThreshold"] = 100,
+            ["hideForTanks"] = false,
+        }, -- 15
+        {
+            ["name"] = "Shield Bar",
+            ["indicatorName"] = "shieldBar",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["position"] = {"BOTTOMLEFT", nil, "BOTTOMLEFT", 0, 0},
+            ["frameLevel"] = 5,
+            ["height"] = 4,
+            ["color"] = {1, 1, 0, 1},
+            ["onlyShowOvershields"] = false,
+        }, -- 16
+        {
+            ["name"] = "PW:S",
+            ["indicatorName"] = "powerWordShield",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["position"] = {"CENTER", "healthBar", "RIGHT", 0, 0},
+            ["frameLevel"] = 20,
+            ["size"] = {4, 0},
+            ["shieldByMe"] = true,
+        }, --17
+        {
+            ["name"] = "AoE Healing",
+            ["indicatorName"] = "aoeHealing",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["height"] = 10,
+            ["color"] = {1, 1, 0},
+        }, -- 18
+        {
+            ["name"] = "External Cooldowns",
+            ["indicatorName"] = "externalCooldowns",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"RIGHT", "button", "RIGHT", 2, 5},
+            ["frameLevel"] = 10,
+            ["size"] = {12, 20},
+            ["showDuration"] = false,
+            ["showAnimation"] = true,
+            --! custom: jump (refresh) animation, on as before so nothing changes silently
+            ["showJump"] = true,
+            ["num"] = 2,
+            ["orientation"] = "right-to-left",
+            ["font"] = {
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "TOPRIGHT", 2, 1, {1, 1, 1}},
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "BOTTOMRIGHT", 2, -1, {1, 1, 1}},
+            },
+            ["glowOptions"] = {"None", {0.95, 0.95, 0.32, 1}}
+        }, -- 19
+        {
+            ["name"] = "Defensive Cooldowns",
+            ["indicatorName"] = "defensiveCooldowns",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"LEFT", "button", "LEFT", -2, 5},
+            ["frameLevel"] = 10,
+            ["size"] = {12, 20},
+            ["showDuration"] = false,
+            ["showAnimation"] = true,
+            --! custom: jump (refresh) animation, on as before so nothing changes silently
+            ["showJump"] = true,
+            ["num"] = 2,
+            ["orientation"] = "left-to-right",
+            ["font"] = {
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "TOPRIGHT", 2, 1, {1, 1, 1}},
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "BOTTOMRIGHT", 2, -1, {1, 1, 1}},
+            },
+            ["glowOptions"] = {"None", {0.95, 0.95, 0.32, 1}}
+        }, -- 20
+        {
+            ["name"] = "Externals + Defensives",
+            ["indicatorName"] = "allCooldowns",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["position"] = {"LEFT", "button", "LEFT", -2, 5},
+            ["frameLevel"] = 10,
+            ["size"] = {12, 20},
+            ["showDuration"] = false,
+            ["showAnimation"] = true,
+            --! custom: jump (refresh) animation, on as before so nothing changes silently
+            ["showJump"] = true,
+            ["num"] = 2,
+            ["orientation"] = "left-to-right",
+            ["font"] = {
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "TOPRIGHT", 2, 1, {1, 1, 1}},
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "BOTTOMRIGHT", 2, -1, {1, 1, 1}},
+            },
+            ["glowOptions"] = {"None", {0.95, 0.95, 0.32, 1}}
+        }, -- 21
+        {
+            ["name"] = "Dispels",
+            ["indicatorName"] = "dispels",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"BOTTOMRIGHT", "button", "BOTTOMRIGHT", 0, 4},
+            ["frameLevel"] = 15,
+            ["size"] = {12, 12},
+            ["filters"] = {
+                ["dispellableByMe"] = true,
+                ["Curse"] = true,
+                ["Disease"] = true,
+                ["Magic"] = true,
+                ["Poison"] = true,
+                ["Bleed"] = true,
+            },
+            ["highlightType"] = "gradient-half",
+            ["iconStyle"] = "blizzard",
+            ["orientation"] = "right-to-left",
+        }, -- 22
+        {
+            ["name"] = "Debuffs",
+            ["indicatorName"] = "debuffs",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"BOTTOMLEFT", "button", "BOTTOMLEFT", 1, 4},
+            ["frameLevel"] = 5,
+            ["size"] = {{13, 13}, {17, 17}},
+            ["showDuration"] = false,
+            ["showAnimation"] = true,
+            --! custom: jump (refresh) animation, on as before so nothing changes silently
+            ["showJump"] = true,
+            ["showTooltip"] = false,
+            ["enableBlacklistShortcut"] = false,
+            ["num"] = 3,
+            ["font"] = {
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "TOPRIGHT", 2, 1, {1, 1, 1}},
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "BOTTOMRIGHT", 2, -1, {1, 1, 1}},
+            },
+            ["dispellableByMe"] = false,
+            ["orientation"] = "left-to-right",
+        }, -- 23
+        {
+            ["name"] = "Raid Debuffs",
+            ["indicatorName"] = "raidDebuffs",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"CENTER", "button", "CENTER", 0, 3},
+            ["frameLevel"] = 20,
+            ["size"] = {22, 22},
+            ["border"] = 2,
+            ["num"] = 1,
+            ["showDuration"] = true,
+            ["font"] = {
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "TOPRIGHT", 2, 1, {1, 1, 1}},
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "BOTTOMRIGHT", 2, -1, {1, 1, 1}},
+            },
+            ["onlyShowTopGlow"] = false,
+            ["orientation"] = "left-to-right",
+            ["showTooltip"] = false,
+            --! custom: jump (refresh) animation, on as before so nothing changes silently
+            ["showJump"] = true,
+        }, -- 24
+        {
+            ["name"] = "Targeted Spells",
+            ["indicatorName"] = "targetedSpells",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["showAllSpells"] = false,
+            ["position"] = {"TOPLEFT", "button", "TOPLEFT", -4, 4},
+            ["frameLevel"] = 50,
+            ["size"] = {20, 20},
+            ["border"] = 2,
+            ["num"] = 1,
+            ["font"] = {"Cell ".._G.DEFAULT, 12, "Outline", false, "TOPRIGHT", 2, 1, {1, 1, 1}},
+            ["orientation"] = "left-to-right",
+        }, -- 25
+        {
+            ["name"] = "Crowd Controls",
+            ["indicatorName"] = "crowdControls",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["position"] = {"TOPLEFT", "button", "TOPLEFT", 15, -4},
+            ["frameLevel"] = 10,
+            ["size"] = {20, 20},
+            ["border"] = 2,
+            ["num"] = 2,
+            ["showDuration"] = false,
+            --! custom: jump (refresh) animation, on as before so nothing changes silently
+            ["showJump"] = true,
+            ["font"] = {
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "TOPRIGHT", 2, 1, {1, 1, 1}},
+                {"Cell ".._G.DEFAULT, 11, "Outline", false, "BOTTOMRIGHT", 2, -1, {1, 1, 1}},
+            },
+            ["orientation"] = "left-to-right",
+        }, -- 26
+        {
+            ["name"] = "Actions",
+            ["indicatorName"] = "actions",
+            ["type"] = "built-in",
+            ["enabled"] = true,
+            ["speed"] = 1,
+        }, -- 27
+        {
+            ["name"] = "Missing Buffs",
+            ["indicatorName"] = "missingBuffs",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["position"] = {"BOTTOMRIGHT", "button", "BOTTOMRIGHT", 0, 4},
+            ["frameLevel"] = 10,
+            ["size"] = {13, 13},
+            ["orientation"] = "right-to-left",
+            --! WotLK fix: подсветка иконки стала отдельной настройкой. true - как
+            --! было раньше, чтобы обновление ничего не меняло молча; существующим
+            --! базам ключ доберёт RepairAgainstDefaults в Revise.
+            ["showGlow"] = true,
+        }, -- 28
+        --! WotLK feature: predictive AoE-cluster counter (Indicators/Cluster.lua).
+        --! Off by default - an update must not silently put a new number on every
+        --! frame of an existing layout.
+        {
+            ["name"] = "Cluster",
+            ["indicatorName"] = "cluster",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["position"] = {"TOPRIGHT", "button", "TOPRIGHT", -1, -1},
+            ["frameLevel"] = 2,
+            ["font"] = {"Cell ".._G.DEFAULT, 11, "Outline", false},
+            ["color"] = {0.7, 1, 0.7},
+            --! 0 = radius of your own class and spec.
+            ["clusterRadius"] = 0,
+            ["lowHealthOnly"] = false,
+        }, -- 29
+        --! WotLK feature: incoming-heal counter (Indicators/IncomingHealers.lua).
+        --! Off by default, same reason as the one above.
+        {
+            ["name"] = "Incoming Healers",
+            ["indicatorName"] = "incomingHealers",
+            ["type"] = "built-in",
+            ["enabled"] = false,
+            ["position"] = {"BOTTOMRIGHT", "button", "BOTTOMRIGHT", -1, 1},
+            ["frameLevel"] = 2,
+            ["font"] = {"Cell ".._G.DEFAULT, 11, "Outline", false},
+            --! Two colours, not one: the first is used while the heal landing first is
+            --! the player's own, the second while somebody else gets there first.
+            ["incomingHealersColors"] = {
+                {0.4, 1, 0.4},
+                {1, 0.6, 0.2},
+            },
+            ["countHoTs"] = false,
+        }, -- 30
+    },
+}
+
+Cell.defaults.layoutAutoSwitch = {
+    ["solo"] = "default",
+    ["party"] = "default",
+    ["raid_outdoor"] = "default",
+    ["raid10"] = "default",
+    ["raid25"] = "default",
+    ["arena"] = "default",
+    ["battleground15"] = "default",
+    ["battleground40"] = "default",
+}

@@ -1,0 +1,64 @@
+## Interface: 30300
+## Title: Cell
+## Version: r277-release
+## Author: enderneko (3.3.5a backport by Keoo)
+## Notes: Clean healing addon with customizable frames.
+## Notes-ruRU: Дополнение для улучшения качества лечения с настраиваемыми рамками.
+## X-Flavor: Wrath
+## SavedVariables: CellDB, CellDBBackup
+## SavedVariablesPerCharacter: CellCharacterDB
+
+# WotLK backport: upstream shipped X-Curse-Project-ID / X-Wago-ID / X-WoWI-ID here. Those ids
+# belong to enderneko's retail project, and addon managers match an installed folder by them --
+# one would happily "update" this backport with retail files that cannot run on 3.3.5. Credit
+# lives in "## Author" above and in the README. Do not restore them from upstream.
+
+DebugSnapshot.lua
+
+Libs\ClassicAPI\Load.xml
+
+Locales\LoadLocales.xml
+
+Libs\LoadLibs_Classic.xml
+
+
+
+Core_Wrath.lua
+Debug.lua
+Debug_Wrath.lua
+Utils.lua
+# WotLK backport: LibGroupInfo captures Cell.GetUnitClassToken, GetNormalizedRealmName
+# and the group adapters at load time, so it must follow Utils.lua and Core_Wrath.lua.
+Libs\LibGroupInfo.lua
+Revise.lua
+Comm\LoadComm.xml
+Widgets\LoadWidgets_Classic.xml
+Defaults\LoadDefaults_Wrath.xml
+
+HideBlizzard.lua
+
+Indicators\Base.lua
+Indicators\Built-in.lua
+Indicators\StatusIcon.lua
+Indicators\AoEHealing.lua
+Indicators\Cluster.lua
+Indicators\IncomingHealers.lua
+Indicators\TargetedSpells.lua
+Indicators\Actions.lua
+Indicators\Custom_Classic.lua
+
+RaidFrames\MainFrame.lua
+
+RaidDebuffs\ExpansionData\LoadExpansionData.xml
+Modules\LoadModules_Classic.xml
+Utilities\LoadUtilities_Classic.xml
+RaidDebuffs\LoadRaidDebuffs_Wrath.xml
+
+RaidFrames\UnitButton_Cata_Wrath.lua
+RaidFrames\UnitButton.xml
+RaidFrames\Groups\SoloFrame.lua
+RaidFrames\Groups\PartyFrame.lua
+RaidFrames\Groups\RaidFrame.lua
+RaidFrames\Groups\PetFrame.lua
+RaidFrames\Groups\NPCFrame.lua
+RaidFrames\Groups\SpotlightFrame.lua

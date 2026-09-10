@@ -1,0 +1,1426 @@
+---------------------------------------------------------------------
+-- File: Cell\RaidDebuffs\RaidDebuffs_WotLK.lua
+-- Author: enderneko (enderneko-dev@outlook.com)
+-- Created : 2022-08-05 16:11:18 +08:00
+-- Modified: 2025-02-20 16:08 +08:00
+---------------------------------------------------------------------
+
+local _, Cell = ...
+local F = Cell.funcs
+
+--! WotLK fix: 2026-09-07 collision pass. 18 spell names in this file were claimed twice
+--! inside one instance, and a bare id is keyed BY NAME (F.GetDebuffList), so only one of
+--! the two rows existed - which one was up to `pairs` order over the boss tables. Fixed
+--! two ways: the narrower row got quotes (quoted = trackByID, keyed by its own id) while
+--! the broad row keeps the name key, and the two faction-mirrored encounters (ToC
+--! Champions, Nexus commanders) have their shared ids moved into the instance's
+--! ["general"] list, so one working row covers whichever side the raid faces. Proof per
+--! record is in the registry, GAP-142 in audit/STUDY_GAPS.md - the lists here stay data
+--! only. Every label in this file already matched the client's Spell.dbc
+--! (`dbc_probe.py --labels`).
+--! WotLK fix: 2026-09-10 pass over the same fork (HEAD 2bbdac11, data commit e18fcb23)
+--! took its remaining new raid debuffs, 141 here, appended per boss; dropped only ids
+--! duplicating a name/id already in that instance and out-of-era player spells. Proof: GAP-148.
+local debuffs = {
+    [753] = { -- 阿尔卡冯的宝库
+        ["general"] = {
+            60899, -- 护盾碾压
+            "72120", -- 冰霜撕咬
+            60923, -- 岩石雨
+        },
+        [1597] = { -- 岩石看守者阿尔卡冯
+            60880, -- 践踏
+            58965, -- Choking Cloud
+            58974, -- Crushing Leap
+            58672, -- Impale
+        },
+        [1598] = { -- 风暴看守者埃玛尔隆
+        },
+        [1599] = { -- 火焰看守者科拉隆
+            66684, -- 余烬
+        },
+        [1600] = { -- 寒冰看守者图拉旺
+            72090, -- 大地冰封
+            "72004", -- 冰霜撕咬
+            -72034, -- 霜至
+            "72098", -- Frostbite
+        },
+    },
+
+    [754] = { -- Naxxramas
+        ["general"] = {
+            59899, -- 毒性充能
+            54708, -- 撕裂
+            54709, -- 血肉腐烂
+            54769, -- 黏液爆炸
+            54772, -- 腐烂撕咬
+            54805, -- 精神鞭笞
+            56538, -- 疫病喷溅
+            16856, -- 致死打击
+            "29849", -- 冰霜新星
+            "30094", -- 冰霜新星
+            33661, -- 碾碎护甲
+            55318, -- 穿刺护甲
+            55322, -- 血之疫病
+            55331, -- 冰冷触摸
+            55334, -- 绞袭
+            6713, -- 缴械
+            -54714, -- 酸性箭雨
+            -28440, -- 暗影迷雾
+            -28801, -- 软泥
+            56729, -- Frenzied Leap
+            29848, -- Polymorph
+            30092, -- Blast Wave
+            30091, -- Flamestrike
+            30095, -- Cone of Cold
+            55317, -- Charge
+            27891, -- Acidic Sludge
+            27807, -- Bile Vomit
+            27758, -- War Stomp
+            54093, -- Silence
+            28434, -- Spider Web
+        },
+        [1601] = { -- Anub'Rekhan
+            56098, -- 酸液喷射
+            -54022, -- 虫群风暴
+        },
+        [1602] = { -- Grand Widow Faerlina
+            54099, -- 火焰之雨
+            -54098, -- 毒液箭雨
+        },
+        [1603] = { -- Maexxna
+            28622, -- 蛛网裹体
+            28776, -- 死灵之毒
+            54125, -- 蛛网喷射
+        },
+        [1604] = { -- Noth the Plaguebringer
+            "29212", -- Cripple
+            "32736", -- Mortal Strike
+            54814, -- Cripple
+            54835, -- 药剂师诅咒
+            54836, -- 药剂师的怒火
+        },
+        [1605] = { -- Heigan the Unclean
+            -29310, -- 法术瓦解
+            -55011, -- 衰老热疫
+        },
+        [1606] = { -- Loatheb
+            -29232, -- 蘑菇花
+            55052, -- 必然的厄运
+            55053, -- 死亡之花
+            -55593, -- 死灵光环
+        },
+        [1607] = { -- Instructor Razuvious
+            55470, -- 紊乱打击
+            55550, -- 裂纹小刀
+        },
+        [1608] = { -- Gothik the Harvester
+            27825, -- 暗影遮罩
+            55645, -- 死亡疫病
+            --! WotLK fix: Drain Life - the Unrelenting Riders' drain, taken from the
+            --! NoM0Re fork 2026-09-06. Sits next to 55645 Death Plague, which is the
+            --! same encounter's other add ability. Name is unique inside Naxxramas
+            --! (id verified in the client's Spell.dbc; the list keys BY NAME, so an
+            --! id whose name is already present in this instance is not added).
+            55646, -- Drain Life
+            28679, -- Harvest Soul
+        },
+        [1609] = { -- The Four Horsemen
+            -28832, -- 库尔塔兹印记
+            -28833, -- 布劳缪克丝印记
+            -28834, -- 瑞文戴尔印记
+            -28835, -- 瑟里耶克印记
+            57369, -- 邪恶之影
+        },
+        [1610] = { -- Patchwerk
+        },
+        [1611] = { -- Grobbulus
+            28169, -- 变异注射
+        },
+        [1612] = { -- Gluth
+            29306, -- 感染之伤
+            54378, -- 致命伤
+        },
+        [1613] = { -- Thaddius
+            -28059, -- 正能量电荷
+            -28084, -- 负能量电荷
+        },
+        [1614] = { -- Sapphiron
+            "28522", -- 寒冰箭
+            55665, -- 生命吸取
+            55699, -- 寒冷
+            -55799, -- 冰霜光环
+        },
+        [1615] = { -- Kel'Thuzad
+            27808, -- 冰霜冲击
+            27819, -- 自爆法力
+            28410, -- 克尔苏加德锁链
+            "-55802", -- 寒冰箭
+            "-55807", -- 寒冰箭
+            28478, -- Frostbolt
+        },
+    },
+
+    [755] = { -- 黑曜石圣殿
+        ["general"] = {
+            39647, -- 治疗诅咒
+            13737, -- 致死打击
+            58947, -- 震荡波
+            58940, -- 烈焰震击
+            57759, -- 落锤
+            57757, -- Rain of Fire
+        },
+        [1616] = { -- 萨塔里奥
+            57491, -- 烈焰之啸
+            60708, -- 护甲衰减
+            --! WotLK fix: three of Sartharion's own abilities were missing, taken from
+            --! the NoM0Re fork 2026-09-06. Tail Lash is the melee-range knockback,
+            --! Magma the lava wave, Twilight Shift the portal debuff. All three ids
+            --! exist in the client's Spell.dbc and none of their names is already used
+            --! inside this instance - the list keys BY NAME, so a duplicate name would
+            --! have replaced the entry that is there.
+            56910, -- Tail Lash
+            57634, -- Magma
+            57874, -- Twilight Shift
+            -58105, -- 沙德隆之力
+            -61248, -- 塔尼布隆之力
+            -61251, -- 维斯匹隆之力
+            57935, -- Twilight Torment
+        },
+    },
+
+    [756] = { -- 永恒之眼
+        ["general"] = {
+        },
+        [1617] = { -- 玛里苟斯
+            60072, -- 奥术吐息
+            60936, -- 能量涌动
+            57429, -- 静电力场
+            -56438, -- 奥术过载
+            -55849, -- 能量火花
+            -61071, -- 漩涡
+        },
+    },
+
+    [759] = { -- 奥杜尔
+        ["general"] = {
+            "64847", -- 符文烈焰喷射
+            64766, -- 激光弹幕
+            62845, -- 断筋
+            "50370", -- Sunder Armor
+            -------
+            64698, -- 炎爆术
+            64697, -- 地震术
+            -------
+            65102, -- 锯刃
+            -------
+            64967, -- 符文击打
+            64942, -- 毁灭飞跃
+            64971, -- 电击
+            "64988", -- 符文烈焰喷射
+            -------
+            63615, -- 破坏护甲
+            63673, -- 闪电烙印
+            -------
+            64638, -- 酸性撕咬
+            64649, -- 冰冻吐息
+            "-64653", -- Blizzard
+            -64655, -- 冰锥术
+            -------
+            63551, -- 毒性吐息
+            63568, -- 活体海啸
+            63272, -- 飓风
+            63548, -- 大地裂隙
+            63549, -- 石化联结
+            -------
+            64740, -- 能量分流
+            64919, -- 寒冰新星
+            -------
+            13704, -- 心灵尖啸
+            63755, -- 致命毒药
+            52719, -- 震荡猛击
+            57807, -- 破甲
+            63775, -- 烈焰风暴
+            -63757, -- 雷霆一击
+            -38064, -- 冲击波
+            64851, -- Flaming Rune
+        },
+        [1637] = { -- 烈焰巨兽
+            62374, -- 被追踪
+            62297, -- 霍迪尔之怒
+            62376, -- 撞锤
+        },
+        [1638] = { -- 掌炉者伊格尼斯
+            62717, -- 熔渣炉
+            63536, -- 熔渣覆体
+            63472, -- 烈焰喷射
+        },
+        [1639] = { -- 锋鳞
+            64757, -- 风暴打击
+            64774, -- 护甲熔化
+            64771, -- 熔化护甲
+            64021, -- 烈焰龙息
+            --! WotLK fix: Flame Buffet - the stacking burn the Dark Rune Guardians put
+            --! on whoever is closest, taken from the NoM0Re fork 2026-09-06. Id exists
+            --! in the client's Spell.dbc and the name is not already used inside
+            --! Ulduar - the list keys BY NAME, so a duplicate name would have replaced
+            --! the entry already there.
+            64016, -- Flame Buffet
+        },
+        [1640] = { -- XT-002拆解者
+            65121, -- 灼热之光
+            64234, -- 重力炸弹
+            64236, -- 静电充能
+            -62775, -- 发脾气
+        },
+        [1641] = { -- 钢铁议会
+            61878, -- 过载
+            61888, -- 压倒能量
+            63493, -- 熔化冲压
+            63494, -- 静电瓦解
+            63490, -- 死亡符文
+        },
+        [1642] = { -- 科隆加恩
+            63978, -- 岩石新星
+            62055, -- 脆弱皮肤
+            62030, -- 石化吐息
+            64002, -- 压碎护甲
+            --! WotLK fix: Stone Grip - Kologarn's grab was missing entirely, the only
+            --! genuine hole among the 201 ids the NoM0Re fork added (dbc_probe.py
+            --! --coverage measured it against the ElvUI + HealBot reference lists: it
+            --! wanted 64290 for 10-man and 64292 for 25-man). One entry covers both:
+            --! the id has no quotes, so F.GetDebuffList keys it BY NAME, and all six
+            --! Stone Grip ids in the client's Spell.dbc share that name.
+            64290, -- Stone Grip
+        },
+        [1643] = { -- 欧尔莉亚
+            64666, -- 野蛮突袭
+            64669, -- 野性突袭
+            64667, -- 撕扯
+            -64679, -- 警戒冲击
+            -64386, -- 惊骇尖啸
+            --! WotLK fix: Guardian Swarm - the Sanctum Sentries' swarm on Auriaya,
+            --! taken from the NoM0Re fork 2026-09-06. Same checks as the other ids
+            --! added from that fork: present in the client's Spell.dbc, name unique
+            --! inside Ulduar (the list keys BY NAME).
+            64396, -- Guardian Swarm
+            65029, -- Guardian Swarm Focus
+        },
+        [1644] = { -- 霍迪尔
+            62469, -- 冰冻
+            61969, -- 快速冻结
+            62038, -- 刺骨之寒
+        },
+        [1645] = { -- 托里姆
+            62526, -- 符文爆裂
+            62605, -- 冰霜新星
+            62130, -- 重压打击
+            62042, -- 风暴之锤
+            62470, -- 震耳雷霆
+            62418, -- 穿刺
+            62420, -- 盾牌重击
+            64151, -- 横扫摔绊
+            32323, -- 冲锋
+            62602, -- 暴风雪
+            63540, -- 瘫痪力场
+            -35054, -- 致死打击
+            -62601, -- 寒冰箭
+            -62326, -- 卑鄙攻击
+            -62604, -- 寒冰箭雨
+            --! WotLK fix: five abilities cast by the adds of Thorim's gauntlet and
+            --! arena were missing, taken from the NoM0Re fork 2026-09-06 (the fork
+            --! files them under this boss; we keep its placement). All five ids exist
+            --! in the client's Spell.dbc and none of their names is already used
+            --! inside Ulduar - the list keys BY NAME, so a duplicate name would have
+            --! replaced an entry that is there.
+            62415, -- Acid Breath
+            62318, -- Barbed Shot
+            64970, -- Fuse Lightning
+            62417, -- Sweep
+            40652, -- Wing Clip
+        },
+        [1646] = { -- 弗蕾亚
+            62861, -- 钢铁根须
+            63571, -- 自然之怒
+            62865, -- 不稳定的能量
+            62619, -- 信息素
+            62532, -- 监护者之握
+            --! WotLK fix: Broken Bones and Unstable Sun Beam were missing on Freya,
+            --! taken from the NoM0Re fork 2026-09-06. Both ids exist in the client's
+            --! Spell.dbc and neither name is already used inside Ulduar (the list keys
+            --! BY NAME).
+            62354, -- Broken Bones
+            62243, -- Unstable Sun Beam
+        },
+        [1647] = { -- 米米尔隆
+            65026, -- 凝固汽油炸弹
+            64529, -- 等离子冲击
+            65192, -- 烈焰遏制
+            64616, -- 震耳警报
+            -64533, -- 热浪
+            --! WotLK fix: Magnetic Field - the pull inside Mimiron's Magnetic Core
+            --! phase, taken from the NoM0Re fork 2026-09-06. Id exists in the client's
+            --! Spell.dbc, name unique inside Ulduar (the list keys BY NAME).
+            64668, -- Magnetic Field
+        },
+        [1648] = { -- 维扎克斯将军
+            63276, -- 无面者的印记
+            -63277, -- 暗影撞击
+            -63420, -- 极度黑暗
+            -62692, -- 绝望光环
+            -62661, -- 灼热烈焰
+        },
+        [1649] = { -- 尤格-萨隆
+            63134, -- 萨拉的祝福
+            63038, -- 黑暗箭雨
+            63138, -- 萨拉的热情
+            63120, -- 疯狂
+            63802, -- 心智链接
+            63830, -- 心灵疾病
+            64126, -- 挤压
+            64153, -- 黑色热疫
+            64157, -- 厄运诅咒
+            64152, -- 脱水毒药
+            64156, -- 冷漠
+            64160, -- 吸取生命
+            -64189, -- 震耳咆哮
+            -64145, -- 能量衰减
+            -63050, -- 理智
+            63147, -- Sara's Anger
+        },
+        [1650] = { -- 观察者奥尔加隆
+            62169, -- 黑洞
+            64412, -- 相位冲压
+        },
+    },
+
+    [757] = { -- 十字军的试炼
+        ["general"] = {
+            65542, -- Silence
+            66018, -- Strangulate
+            65930, -- Intimidating Shout
+            65960, -- Blind
+            66613, -- Hammer of Justice
+        },
+        [1618] = { -- 诺森德猛兽
+            66407, -- 裂颅
+            66406, -- 狗头人上身
+            66331, -- 穿刺
+            66830, -- 麻痹
+            66869, -- 灼热胆汁
+            66823, -- 麻痹毒素
+            66689, -- 极寒吐息
+            66770, -- 野蛮头冲
+            66320, -- 燃烧弹
+            -66683, -- 重型撞击
+        },
+        [1619] = { -- 加拉克苏斯大王
+            "66197", -- 军团烈焰（准备）
+            "66199", -- 军团烈焰
+            66283, -- 旋压痛击
+            66237, -- 血肉成灰
+            66532, -- 魔能火球
+            66334, -- 女王之吻
+            "68126", -- Legion Flame
+            "68127", -- Legion Flame
+            "68128", -- Legion Flame
+        },
+        [1620] = { -- 联盟的冠军
+            65857, -- Entangling Roots
+            66054, -- Hex
+            65543, -- Psychic Scream
+            65490, -- Vampiric Touch
+            65541, -- Shadow Word: Pain
+            65488, -- Mind Flay
+            64058, -- Psychic Horror
+            65810, -- Corruption
+            65814, -- Curse of Agony
+            65815, -- Curse of Exhaustion
+            65809, -- Fear
+            65812, -- Unstable Affliction
+            65792, -- Frost Nova
+            65807, -- Frostbolt
+            65801, -- Polymorph
+            65883, -- Aimed Shot
+            65866, -- Explosive Shot
+            66207, -- Wing Clip
+            65877, -- Wyvern Sting
+            65859, -- Cyclone
+            65855, -- Insect Swarm
+            65856, -- Moonfire
+            65926, -- Mortal Strike
+            65929, -- Charge Stun
+            65935, -- Disarm
+            66020, -- Chains of Ice
+            67767, -- Frost Fever
+            65954, -- Hemorrhage
+            65962, -- Wound Poison
+            65970, -- Stormstrike
+            66008, -- Repentance
+            24259, -- Spell Lock
+        },
+        [1621] = { -- 部落的冠军
+        },
+        [1622] = { -- 瓦格里双子
+            "66069", -- 双生之刺
+            "66075", -- 双生之刺
+            65950, -- 光明之触
+            66001, -- 黑暗之触
+            "67309", -- Twin Spike
+            "67310", -- Twin Spike
+            "67311", -- Twin Spike
+            "67312", -- Twin Spike
+            "67313", -- Twin Spike
+            "67314", -- Twin Spike
+        },
+        [1623] = { -- 阿努巴拉克
+            67574, -- 被阿努巴拉克追逐
+            66012, -- 寒冰打击
+            67721, -- 破甲虚弱
+            66013, -- 刺骨之寒
+            65775, -- 酸腺撕咬
+            66193, -- 永冻
+            -66118, -- 吸血虫群
+        },
+    },
+
+    [760] = { -- 奥妮克希亚的巢穴
+        ["general"] = {
+            18958, -- 烈焰鞭笞
+            12097, -- 穿刺护甲
+        },
+        [1651] = { -- 奥妮克希亚
+            -18431, -- 低吼
+        },
+    },
+
+    [758] = { -- 冰冠堡垒
+        ["general"] = {
+            70980, -- 蛛网裹体
+            70964, -- 盾击
+            -------
+            69483, -- 黑暗清算
+            -------
+            69903, -- 盾牌猛击
+            -69911, -- 血之疫病
+            -69917, -- 冰霜疫病
+            -69930, -- 奉献
+            -69975, -- 爆炸射击
+            -------
+            70189, -- 毒液喷吐
+            -70362, -- 暴风雪
+            -------
+            71089, -- 毒脓
+            71127, -- 致命之伤
+            -------
+            70426, -- 堕落之血
+            70423, -- 吸血诅咒
+            70435, -- 撕裂肉体
+            70408, -- 魔法增效
+            70451, -- 鲜血镜像
+            70409, -- 火球术
+            -------
+            71647, -- 寒冰陷阱
+            71257, -- 野蛮打击
+            -------
+            71316, -- 冰川打击
+            --! WotLK fix: was "71330" - quoted, i.e. tracked BY ID. The client knows
+            --! eight spells called Ice Tomb (16869, 29670, 69675, 69700, 69712, 70157,
+            --! 71330, 71331) because every raid size and difficulty gets its own id,
+            --! and an ID-tracked entry fires on exactly one of them. A real 25-man run
+            --! (reference/WoWCombatLog.txt) shows the Ice Sorceress casting 71331, so
+            --! 71330 never lit up at all. Unquoted the entry is matched BY NAME, which
+            --! covers all eight at once; Sindragosa keeps her own ID-tracked 70157
+            --! below and still wins there, because the lookup in Built-in.lua tries the
+            --! spell id before the spell name.
+            71331, -- Ice Tomb
+            71320, -- 冰霜新星
+            71327, -- 蛛网
+            "71318", -- 寒冰箭
+            -------
+            71386, -- 寒冰吐息
+            71380, -- 寒冰冲击
+            -36922, -- 低吼
+            -- 71387, -- 冰霜光环
+            -------
+            --! WotLK fix: trash debuffs that a full 25-man clear actually puts on the
+            --! raid and this list did not have at all - taken from the encounter log
+            --! reference/WoWCombatLog.txt (2026-08-31, 19:19-21:46, all twelve bosses),
+            --! counted as "applications / distinct players hit" and kept only where the
+            --! raid has something to do about it. Ids are unquoted on purpose: see the
+            --! Ice Tomb note above.
+            71150, -- Plague Cloud (74 / 22, Plagued Abomination)
+            71252, -- Volley (55 / 25, Ymirjar Huntress)
+            70671, -- Leeching Rot (44 / 22, Blood-sucking imp)
+            72848, -- Arctic Breath (38 / 22, Rotting Frost Giant)
+            71151, -- Blast Wave (37 / 20, Darkfallen Archmage)
+            71157, -- Infected Wound (16 / 7, Plague Zombie)
+            71362, -- Frost Blast (10 / 5, Frostwing Whelp)
+            70432, -- Blood Sap (9 / 8, Darkfallen Tactician - stun)
+            72865, -- Death Plague (6 / 6, Rotting Frost Giant)
+            71103, -- Combobulating Spray (6 / 5, Plague Scientist)
+            71163, -- Devour Humanoid (4 / 4, Vengeful Fleshreaper)
+            --! WotLK fix: second batch from the same log - every remaining debuff a real
+            --! NPC put on a raider and this list did not have, either by id or by name.
+            --! Left out on purpose: zone and item auras (Chill of the Throne, the six
+            --! Citadel teleports, Exhaustion, Forbearance, Hypothermia, Ardent Defender,
+            --! Sulfuron Slammer, Geist Alarm), plain Dazed from melee, and everything one
+            --! raider casts on another. The last four here are listed unchecked because
+            --! they only shave armor or stun for a second - they sit in the options list
+            --! and take one click to switch on.
+            72571, -- Wounding Strike (9 / 2, Kor'kron Sergeant - healing taken down)
+            72026, -- Gut Spray (4 / 4, Gluttonous Abomination)
+            71124, -- Curse of Doom (3 / 2, Kor'kron Necrolyte)
+            70475, -- Giant Insect Swarm (3 / 3, Precious' trap in the Plagueworks)
+            69405, -- Consuming Shadows (3 / 3, Deathspeaker Attendant)
+            71552, -- Mortal Strike (2 / 2, Suffering Soul - healing taken down)
+            71298, -- Banish (2 / 1, Ymirjar Deathbringer)
+            71117, -- Avenger's Shield (2 / 1, Kor'kron Reaver - silence)
+            70645, -- Chains of Shadow (2 / 2, Darkfallen Noble)
+            71112, -- Curse of Agony (1 / 1, Deathspeaker Attendant)
+            -71960, -- Heroic Leap (2 / 2, Suffering Soul)
+            -71130, -- Frostfire Bolt (1 / 1, Kor'kron Invoker)
+            70410, -- Polymorph: Spider
+            71443, -- Impaling Spear
+            71784, -- Hammer of Betrayal
+            71785, -- Conflagration
+            "57807", -- Sunder Armor
+            71350, -- Focus Fire
+        },
+        [1624] = { -- 玛洛加尔领主
+            69065, -- 穿刺
+            69146, -- 冷焰
+        },
+        [1625] = { -- 亡语者女士
+            71289, -- 统御心灵
+            71237, -- 麻痹诅咒
+            70659, -- 死疽打击
+            71204, -- 蔑视之触
+            71001, -- 死亡凋零
+            -71420, -- 寒冰箭
+            -72905, -- 寒冰箭雨
+            "65936", -- Sunder Armor
+        },
+        [1627] = { -- 冰冠冰川炮舰战
+            --! WotLK fix: the gunship battle was an empty list, so the fight showed
+            --! nothing at all. Both entries are proven by reference/WoWCombatLog.txt
+            --! (25-man, 19:53-20:08): counts are "applications / distinct players hit".
+            70309, -- Rending Throw (6 / 2, High Overlord Saurfang - tank bleed)
+            71787, -- Fel Iron Bomb (5 / 5, Captain Rupert)
+            --! WotLK fix: the enemy captains hit the boarding party too - same log, same
+            --! "applications / distinct players hit". Sunder Armor is matched by name, so
+            --! the one entry also covers 57807 cast by the Kor'kron Defender. Both of the
+            --! last two are unchecked: armor loss and a one-second stun are not worth a
+            --! frame each until the player asks for them.
+            71786, -- Rocket Launch (1 / 1, Captain Rupert)
+            -71554, -- Sunder Armor (2 / 1, Captain Grondel)
+            -65929, -- Charge Stun (1 / 1, Captain Grondel)
+        },
+        [1628] = { -- 死亡使者萨鲁法尔
+            72385, -- 沸腾之血
+            72410, -- 符文之血
+            72769, -- 血之气息
+            72293, -- 阵亡勇士的印记
+        },
+        [1629] = { -- 烂肠
+            69240, -- 邪恶毒气
+            69278, -- 毒气孢子
+            69290, -- 枯萎的孢子
+            "72297", -- Malleable Goo
+            72219, -- 毒肿
+            -69291, -- 播种疫苗
+            -- "69279", -- 毒气孢子
+        },
+        [1630] = { -- 腐面
+            69674, -- 畸变感染
+            --! WotLK fix: was unquoted, and Festergut's Vile Gas is 69240 at 1629 - same
+            --! name in Spell.dbc, so one of the two rows was dead by `pairs` order. Quoted
+            --! = trackByID: this row keys on its own id, Festergut's keeps the name key.
+            "72272", -- Vile Gas
+            69789, -- 软泥洪流
+            --! WotLK fix: missing - the puddle the small oozes leave behind, 18 hits on
+            --! 15 players in reference/WoWCombatLog.txt (25-man, 20:55-21:02).
+            71208, -- Sticky Ooze
+        },
+        [1631] = { -- 普崔塞德教授
+            70911, -- 肆虐毒疫
+            70672, -- 毒肿
+            70447, -- 不稳定的软泥怪黏合剂
+            71278, -- 窒息毒气
+            70853, -- 可延展黏液
+            72451, -- 畸变瘟疫
+            -70353, -- 异变毒气
+            --! WotLK fix: Gas Variable above had no twin - the ooze half of the same
+            --! phase-3 mechanic was missing from the list entirely, although the log
+            --! reference/WoWCombatLog.txt shows it on 23 of 25 players (id 74118, 60
+            --! applications). Listed unchecked, exactly like Gas Variable, so nothing
+            --! changes on screen until the player ticks it.
+            -70352, -- Ooze Variable
+            --! WotLK fix: the bomb blast itself was missing - Choking Gas above is the
+            --! cloud, this is what hits whoever stands in it when the bomb goes off
+            --! (1 hit in reference/WoWCombatLog.txt, phase 2).
+            72622, -- Choking Gas Explosion
+            -70308, -- 畸变
+        },
+        [1632] = { -- 鲜血王子议会
+            71807, -- 闪耀火花
+            71822, -- 暗影共鸣
+            -73001, -- 暗影牢笼
+        },
+        [1633] = { -- 鲜血女王兰娜瑟尔
+            70867, -- 鲜血女王的精华
+            70877, -- 疯狂嗜血
+            --! WotLK fix: was "71264" - tracked by id, and the id is the one the boss
+            --! uses on some raid sizes only. Unquoted it is matched by name and covers
+            --! every Swarming Shadows id; the "71265" row below keeps its own id key and
+            --! still wins for that one, because Built-in.lua looks the id up first.
+            71264, -- Swarming Shadows
+            "71265", -- 蜂拥之影
+            --! WotLK fix: was 70838 unquoted, and ["general"] holds 70451 - both are Blood
+            --! Mirror in the client's Spell.dbc, so the two rows fought over one key and
+            --! the general one lost (a boss row always beats a general row). Quoted =
+            --! trackByID: this row keys on its own id, the general row keeps the name key
+            --! and covers the other raid sizes, exactly like the Swarming Shadows pair
+            --! above. The id is looked up first in Built-in.lua, so this row still wins
+            --! here.
+            "70838", -- Blood Mirror
+            70923, -- 失心疯
+            --! WotLK fix: three boss mechanics were missing entirely. Proven by
+            --! reference/WoWCombatLog.txt (25-man, 20:37-20:48), counted as
+            --! "applications / distinct players hit".
+            71340, -- Pact of the Darkfallen (33 / 17 - the link that must be broken)
+            73070, -- Incite Terror (45 / 23 - raid-wide fear)
+            71626, -- Delirious Slash (12 / 1 - tank bleed)
+        },
+        [1634] = { -- 踏梦者瓦莉瑟瑞娅
+            70744, -- 酸性爆炸
+            70751, -- 腐蚀
+            72963, -- 血肉腐烂
+            --! WotLK fix: 70759 and Lady Deathwhisper's 72905 are both Frostbolt Volley in
+            --! the client's Spell.dbc. Both rows are unchecked by default, so nothing
+            --! collides today - but ticking both would leave one of them dead. Quoted =
+            --! trackByID, so this one keys on its own id once the player enables it.
+            "-70759", -- Frostbolt Volley
+        },
+        [1635] = { -- 辛达苟萨
+            69766, -- 动荡
+            69762, -- 狂咒
+            70127, -- 秘法打击
+            70106, -- 寒霜刺骨
+            --! WotLK fix: was 69649 unquoted, and ["general"] holds 71386 - both are Frost
+            --! Breath in the client's Spell.dbc, so the general row was swallowed. Quoted =
+            --! trackByID: this row keys on its own id and still wins here (the id is looked
+            --! up before the name), while the general row keeps the broad name key.
+            "69649", -- Frost Breath
+            "70157", -- 寒冰坟墓
+            --! WotLK fix: was "-70084" - tracked by id. Sindragosa's aura is 71052 on
+            --! 25-man (111 hits on all 25 players in reference/WoWCombatLog.txt), so the
+            --! id-tracked row never fired there. Unquoted it matches by name and covers
+            --! every Frost Aura id. Still off by default, as before.
+            -70084, -- Frost Aura
+            --! WotLK fix: missing - the mark that says who is about to be encased in ice
+            --! and must run out, 14 hits on 12 players (25-man, 20:21-20:24).
+            70126, -- Frost Beacon
+            71665, -- Asphyxiation
+        },
+        [1636] = { -- 巫妖王
+            70338, -- 死疽
+            70541, -- 寄生
+            69409, -- 灵魂收割
+            72133, -- 饱受折磨
+            --! WotLK fix: was "73654" - tracked by id. On 25-man the Lich King sends
+            --! 74297 instead (50 hits on all 25 players in reference/WoWCombatLog.txt),
+            --! so the row never fired: the whole soul-harvest phase was invisible.
+            --! Unquoted it matches by name and covers both.
+            73654, -- Harvest Souls
+            69242, -- 灵魂尖啸
+            --! WotLK fix: was "-73655", same reason; this is the singular Harvest Soul
+            --! put on the players dragged into Frostmourne (50 hits, 21:39-21:41).
+            --! Still off by default, as before.
+            -73655, -- Harvest Soul
+            -72754, -- 污染
+            -72350, -- 霜之哀伤的怒火
+            "74295", -- Harvest Souls
+            "74296", -- Harvest Souls
+            "74297", -- Harvest Souls
+        },
+    },
+
+    [761] = { -- 红玉圣殿
+        ["general"] = {
+            74453, -- 烈焰道标
+            74456, -- 燃烧
+            74509, -- 奥术冲击波
+            74367, -- 破甲斩
+            74384, -- 破胆咆哮
+            13737, -- 致死打击
+            15621, -- 颅骨爆裂
+            75417, -- 震荡波
+            75413, -- Flame Wave
+            74502, -- Enervating Brand
+        },
+        [1652] = { -- 海里昂
+            74567, -- 燃烧印记
+            74562, -- 炽焰燃烧
+            74795, -- 吞噬印记
+            74792, -- 灵魂吞噬
+            74531, -- 尾击
+            75883, -- Combustion
+            75875, -- Consumption
+        },
+    },
+
+    [286] = { -- 乌特加德之巅
+        ["general"] = {
+            56785, -- 快速传染
+            59079, -- 墓穴打击
+            -------
+            59239, -- 撕裂
+            -- 49026, -- 凝视 (invisible)
+            -------
+            49106, -- 恐吓
+            61549, -- 撕碎
+            -------
+            48871, -- Aimed Shot
+        },
+        [641] = { -- 席瓦拉·索格蕾
+            -- 48267, -- 准备仪式
+            48278, -- 麻痹
+            48277, -- 仪祭打击
+            48267, -- Ritual Preparation
+        },
+        [642] = { -- 戈托克·苍蹄
+            59263, -- 重伤
+            59264, -- 刺伤
+            48131, -- 践踏
+            -------
+            59271, -- 毒息
+            48132, -- 酸液喷射
+            -------
+            59265, -- 致命伤
+            -------
+            48144, -- 恐惧咆哮
+            -------
+            59268, -- 穿刺
+            -59267, -- 枯萎咆哮
+        },
+        [643] = { -- 残忍的斯卡迪
+            59330, -- 重压
+            59334, -- 淬毒长矛
+            49092, -- 结网
+            48639, -- 断筋
+            60020, -- 冰冻之云
+            59247, -- 缩小
+        },
+        [644] = { -- 伊米隆国王
+            59300, -- 恶臭溃烂
+            59304, -- 灵魂打击
+            51750, -- 亡者嚎叫
+            -48585, -- 枯萎
+        },
+    },
+
+    [285] = { -- 乌特加德城堡
+        ["general"] = {
+            22427, -- 震荡猛击
+            59601, -- 燃烧之烙
+            43887, -- 极度燥热
+            -------
+            59608, -- 破甲
+            59691, -- 撕裂
+            -37578, -- 衰弱打击
+            -------
+            "59611", -- 冲锋
+            -59613, -- 挫志怒吼
+            "-42702", -- 衰老
+            -------
+            -- 40414, -- 凝视 (invisible)
+            -------
+            42972, -- 致盲
+            -------
+            43936, -- 锐不可挡
+            59605, -- 刺骨戳刺
+            -59599, -- 裂颅
+            -------
+            59686, -- 定时炸弹
+            51588, -- Flame Shock
+            32908, -- Wing Clip
+            6713, -- Disarm
+        },
+        [638] = { -- 凯雷塞斯王子
+            48400, -- 冰霜之墓
+            "59397", -- 衰老
+        },
+        [639] = { -- 斯卡瓦尔德和达尔隆
+            43650, -- 衰弱
+            43651, -- 冲锋
+        },
+        [640] = { -- 掠夺者因格瓦尔
+            59735, -- 悲哀攻击
+            42723, -- 黑暗打击
+            -61485, -- 恐怖咆哮
+        },
+    },
+
+    [284] = { -- 冠军的试炼
+        ["general"] = {
+            67868, -- 被践踏
+            34942, -- 暗言术：痛
+            67237, -- 紊乱打击
+            67255, -- 最终冥想
+        },
+        [834] = { -- 总冠军
+            66043, -- 变形术
+            67534, -- 妖术治愈
+            67710, -- 夺命药膏
+            67542, -- 致死打击
+            67594, -- 毒药瓶
+            -66044, -- 冲击波
+        },
+        [635] = { -- 纯洁者耶德瑞克
+            66940, -- 制裁之锤
+            66862, -- 光芒耀眼
+        },
+        [636] = { -- 银色神官帕尔崔丝
+            66538, -- 神圣之火
+            66619, -- 昔日阴影
+            66552, -- 梦魇乍醒
+            66620, -- 旧患
+            -66547, -- 忏悔
+        },
+        [637] = { -- 黑骑士
+            67781, -- 亵渎
+            67823, -- 死亡标记
+            -67808, -- 死亡撕咬
+            -67719, -- 冰霜疫病
+            -67722, -- 血之疫病
+            67745, -- Death's Respite
+        },
+    },
+
+    [279] = { -- 净化斯坦索姆
+        ["general"] = {
+            58811, -- 腐蚀术
+            46190, -- 痛苦诅咒
+            58782, -- 血毒素
+            52491, -- 蛛网爆炸
+            58758, -- 吞噬血肉
+            -15244, -- 冰锥术
+            -20812, -- 残废术
+            -------
+            58816, -- 时间漩涡
+            52527, -- Wretching Bile
+            58770, -- Drain Mana
+        },
+        [611] = { -- 肉钩
+            58823, -- 束缚之链
+        },
+        [612] = { -- 塑血者沙尔拉姆
+            58845, -- 扭曲血肉诅咒
+            52711, -- 窃取血肉
+        },
+        [613] = { -- 时光领主埃博克
+            58830, -- 致伤打击
+            52772, -- 耗能诅咒
+            -52766, -- 时间扭曲
+            -58848, -- 时间停止
+        },
+        [614] = { -- 玛尔加尼斯
+            58849, -- 沉睡
+            58852, -- 腐臭蜂群
+        },
+    },
+
+    [274] = { -- 古达克
+        ["general"] = {
+            59019, -- 毒性喷吐
+            59023, -- 穿透打击
+            58977, -- 震荡波
+            58993, -- 魔精之波
+            "58994", -- 魔精泥浆
+            58975, -- 雷霆一击
+            58971, -- 烈焰震击
+            58978, -- 穿刺
+            61362, -- 冲击波
+            55643, -- 回吐
+            58967, -- 淬毒长矛
+            58992, -- 震耳咆哮
+            6713, -- Disarm
+        },
+        [592] = { -- 斯拉德兰
+            55126, -- 毒蛇裹体
+            59842, -- 毒性新星
+            58996, -- 毒性撕咬
+            59840, -- 强力撕咬
+            -55093, -- 斯拉德兰之握
+        },
+        [593] = { -- 达卡莱巨像
+            59455, -- 致死打击
+            54819, -- 被魔精浸湿
+            "59451", -- 魔精泥浆
+            55627, -- Mojo Puddle
+        },
+        [594] = { -- 莫拉比
+            59444, -- 决断突刺
+            55101, -- 地震
+            55142, -- 大地震颤
+            -55100, -- 麻痹怒吼
+            -55106, -- 麻痹嚎叫
+        },
+        [595] = { -- 凶残的伊克
+            55814, -- 伊克之秽
+        },
+        [596] = { -- 迦尔达拉
+            59827, -- 穿刺冲锋
+            59825, -- 旋风劈砍
+            59826, -- 刺破
+        },
+    },
+
+    [271] = { -- 安卡赫特：古代王国
+        ["general"] = {
+            56707, -- 腐化传染
+            59108, -- 粘性毒药
+            19134, -- 破胆怒吼
+            56728, -- 黑暗中的眼睛
+            56632, -- 混乱之网
+            61462, -- 冰霜新星
+            13338, -- 语言诅咒
+            61563, -- 腐蚀术
+            34322, -- 心灵尖啸
+            -61460, -- 失落希望光环
+            -61461, -- 寒冰箭
+            "-59116", -- Poison Cloud
+            56581, -- Fatal Sting
+            56858, -- Flamestrike
+        },
+        [580] = { -- 纳多克斯长老
+            59467, -- 蜘蛛疫病
+            59482, -- 致命毒药
+        },
+        [581] = { -- 塔达拉姆王子
+            59513, -- 吸血鬼的拥抱
+        },
+        [582] = { -- 耶戈达·觅影者
+            56926, -- Thundershock
+        },
+        [583] = { -- 埃曼尼塔
+            57095, -- 纠缠根须
+            57061, -- 毒云
+            57055, -- 迷你
+            -56648, -- 高能蘑菇
+        },
+        [584] = { -- 传令官沃拉兹
+            59978, -- 碎裂
+            59974, -- 精神鞭笞
+            57601, -- Blood Plague
+            57647, -- Moonfire
+            57661, -- Rip
+            57799, -- Avenger's Shield
+            57778, -- Shadow Word: Pain
+            57832, -- Thunder Clap
+            57789, -- Mortal Strike
+            61491, -- Intercept
+            9080, -- Hamstring
+        },
+    },
+
+    [277] = { -- 岩石大厅
+        ["general"] = {
+            59039, -- 无情打击
+            -------
+            59034, -- 凿击辐射
+            43104, -- 重伤
+            46202, -- 穿刺护甲
+            50895, -- Lightning Tether
+            51503, -- Domination
+        },
+        [604] = { -- 克莱斯塔卢斯
+            50812, -- 石化之握
+            50836, -- 石化之握
+            -50833, -- 砸击地面
+            48131, -- Stomp
+        },
+        [605] = { -- 悲伤圣女
+            59726, -- 悲伤震荡
+            59727, -- 哀伤之柱
+            50752, -- Storm of Grief
+        },
+        [606] = { -- 远古法庭
+            59868, -- 黑暗物质
+            59864, -- 暗言术-痛
+            59865, -- 大地冲撞
+            58461, -- 破甲
+        },
+        [607] = { -- 塑铁者斯约尼尔
+            59846, -- 静电充能
+            59849, -- 闪电之环
+        },
+    },
+
+    [276] = { -- 映像大厅
+        ["general"] = {
+            72335, -- 肾击
+            72222, -- 诅咒之箭
+            72318, -- 暗言术：痛
+            72329, -- 致命毒药
+            72171, -- 寒冰锁链
+            69222, -- 投掷盾牌
+            72321, -- Cower in Fear
+            72169, -- Flamestrike
+            72166, -- Frostbolt
+            72120, -- Frostbite
+            72333, -- Envenomed Dagger Throw
+            72268, -- Ice Shot
+        },
+        [601] = { -- 法瑞克
+            72426, -- 绝望降临
+            72435, -- 亵渎尖啸
+            72428, -- 绝望一击
+            72422, -- 震荡打击
+            -- 72395, -- 绝望
+            -- 72396, -- 绝望
+            -- 72397, -- 绝望
+        },
+        [602] = { -- 玛维恩
+            72383, -- 腐蚀之触
+            72362, -- 腐蚀之井
+            72363, -- 腐化血肉
+            --! WotLK fix: Shared Suffering - Marwyn's link that splits damage between
+            --! two players, taken from the NoM0Re fork 2026-09-06. Id exists in the
+            --! client's Spell.dbc and the name is not already used inside Halls of
+            --! Reflection (the list keys BY NAME).
+            72368, -- Shared Suffering
+        },
+        [603] = { -- 逃离阿尔萨斯
+            70176, -- 呕吐
+            70144, -- 厄运诅咒
+        },
+    },
+
+    [280] = { -- 灵魂洪炉
+        ["general"] = {
+            69131, -- 灵魂虚弱
+            69060, -- 冰霜新星
+            69133, -- 昏睡
+            69633, -- 暗影之幕
+            -- 69130, -- 灵魂虹吸
+            69128, -- Soul Siphon
+            69066, -- Drain Life
+        },
+        [615] = { -- 布隆亚姆
+            68950, -- 恐惧
+            68921, -- 灵魂风暴
+        },
+        [616] = { -- 噬魂者
+        },
+    },
+
+    [283] = { -- 紫罗兰监狱
+        ["general"] = {
+            52719, -- 震荡猛击
+            58504, -- 痛苦打击
+            59256, -- 穿刺
+            59253, -- 冰霜新星
+            60204, -- 奥术之流
+            32736, -- 致死打击
+            59258, -- 冰锥术
+            25603, -- Slow
+            58464, -- Chains of Ice
+            15043, -- Frostbolt
+            30849, -- Spell Lock
+            58532, -- Frostbolt Volley
+            58534, -- Deep Freeze
+        },
+        [626] = { -- 埃雷克姆
+            39215, -- 龟裂创伤
+            51876, -- 风暴打击
+            -54462, -- 恐怖嚎叫
+        },
+        [627] = { -- 摩拉格
+            54396, -- 旋光链接
+            54417, -- 受难射线
+            59525, -- 痛苦射线
+            54527, -- 腐蚀唾液
+        },
+        [628] = { -- 艾库隆
+        },
+        [629] = { -- 谢沃兹
+            59485, -- 奥术冲击
+        },
+        [630] = { -- 拉文索尔
+            59470, -- 熔岩灼烧
+            -59466, -- 灼烧之焰
+        },
+        [631] = { -- 湮灭者祖拉玛特
+            59746, -- 黑暗遮蔽
+            59743, -- 虚空转移
+            54343, -- 虚空位移
+        },
+        [632] = { -- 塞安妮苟萨
+            59374, -- 法力毁灭
+            59281, -- 无法控制的能量
+            59369, -- 暴风雪
+        },
+    },
+
+    [272] = { -- 艾卓-尼鲁布
+        ["general"] = {
+            52086, -- 蛛网裹体
+            59348, -- 感染之伤
+            59343, -- 撕裂
+            59347, -- 镇压之网
+            59352, -- 黑暗印记
+            -59354, -- 吸取能量
+            -59362, -- 蛛网射击
+        },
+        [585] = { -- 看门者克里克希尔
+            59364, -- 感染撕咬
+            59365, -- 致盲之网
+            59367, -- 精神鞭笞
+            59368, -- 疲倦诅咒
+            59366, -- 毒药喷洒
+            59363, -- 酸液溅射
+        },
+        [586] = { -- 哈多诺克斯
+            59417, -- 吸血毒药
+            53418, -- 穿刺护甲
+            59419, -- 酸性之云
+        },
+        [587] = { -- 阿努巴拉克
+            59433, -- 重击
+            59359, -- 毒箭
+            59349, -- 投掷
+            59350, -- 破甲
+            -59431, -- 吸血虫群
+        },
+    },
+
+    [278] = { -- 萨隆矿坑
+        ["general"] = {
+            50661, -- 动摇的决心
+            69578, -- 转化射线
+            70278, -- 穿刺之伤
+            70292, -- 冰川打击
+            70388, -- 腐蚀之种
+            70391, -- 痛苦诅咒
+            70392, -- 黑暗烙印
+            70393, -- 吞噬血肉
+            69581, -- 血肉化脓
+            69603, -- 凋零
+            69579, -- 弧光切割
+            34779, -- 冰冻之环
+            69583, -- Fireball
+            69527, -- Frost Breath
+            69503, -- Devour Humanoid
+            70302, -- Blinding Dirt
+            69572, -- Shovelled!
+            69573, -- Frostbolt
+        },
+        [608] = { -- 熔炉之主加弗斯特
+            -68786, -- 永冻
+            -68771, -- 雷霆践踏
+            70381, -- Deep Freeze
+        },
+        [609] = { -- 伊克和科瑞克
+            68987, -- 扑杀
+            68989, -- 毒性新星
+            69024, -- 剧毒废渣
+        },
+        [610] = { -- 天灾领主泰兰努斯
+            69275, -- 霜牙印记
+            69245, -- 霜降
+            69238, -- 寒冰冲击
+            --! WotLK fix: Overlord's Brand - Tyrannus' mark that reflects the marked
+            --! player's damage onto the tank, taken from the NoM0Re fork 2026-09-06.
+            --! Id exists in the client's Spell.dbc and the name is not already used
+            --! inside Pit of Saron (the list keys BY NAME).
+            69172, -- Overlord's Brand
+        },
+    },
+
+    [273] = { -- 达克萨隆要塞
+        ["general"] = {
+            50379, -- 残废
+            -------
+            59018, -- 腐蚀喷吐
+            59007, -- 血肉腐烂
+            46202, -- 穿刺护甲
+            -------
+            32330, -- 毒液喷吐
+            49704, -- 罩网
+            -------
+            59009, -- 血之诅咒
+            -------
+            6253, -- 反手一击
+            49711, -- 钩网
+            -------
+            35011, -- 击倒
+            51240, -- 恐惧
+            16856, -- 致死打击
+            36094, -- 幽灵打击
+            33661, -- 碾碎护甲
+            59011, -- 冰冷触摸
+            59010, -- 震耳咆哮
+            -9080, -- 断筋
+            16001, -- Impale
+            55847, -- Shadow Void
+        },
+        [588] = { -- 托尔戈
+            49637, -- 感染之伤
+        },
+        [589] = { -- 召唤者诺沃斯
+            59856, -- 痛苦之怒
+            47346, -- 奥术力场
+            59854, -- 暴风雪
+            8147, -- REVIEW: 雷霆一击
+            49037, -- Frostbolt
+        },
+        [590] = { -- 暴龙之王爵德
+            48920, -- 凶残撕咬
+            48878, -- 刺骨挥砍
+            48873, -- 裂伤挥砍
+            13738, -- 撕裂
+            22686, -- 低吼
+            -59422, -- 恐惧咆哮
+            -49710, -- 重击
+        },
+        [591] = { -- 先知萨隆亚
+            59972, -- 生命诅咒
+            49544, -- 眼棱
+            59969, -- 毒云
+            59971, -- 火焰之雨
+            -49356, -- 腐烂
+            -53463, -- 恢复常态
+        },
+    },
+
+    [275] = { -- 闪电大厅
+        ["general"] = {
+            59165, -- 沉睡
+            -------
+            59085, -- 焊接
+            59142, -- 盾牌猛击
+            59166, -- 烧灼电流
+            -52773, -- 锤击
+            -------
+            61510, -- 熔化护甲
+            -22424, -- 冲击波
+            -------
+            19134, -- 破胆怒吼
+            -23600, -- 刺耳怒吼
+            -------
+            59168, -- 电击
+            -------
+            59178, -- 毒尖长矛
+            -59151, -- 符文冲击
+            -------
+            32315, -- 灵魂打击
+            61579, -- Runic Focus
+            52740, -- Hurl Weapon
+            60236, -- Cyclone
+        },
+        [597] = { -- 比亚格里将军
+            58747, -- 拦截
+            16856, -- 致死打击
+        },
+        [598] = { -- 沃尔坎
+            59530, -- 献祭打击
+            59529, -- 碎裂践踏
+        },
+        [599] = { -- 艾欧纳尔
+            "59795", -- Static Overload
+            52658, -- Static Overload
+            59834, -- 弧光灼烧
+        },
+        [600] = { -- 洛肯
+            59835, -- 闪电新星
+        },
+    },
+
+    [281] = { -- 魔枢
+        ["general"] = {
+            56777, -- 沉默
+            47779, -- 奥术洪流
+            56776, -- 奥术震击
+            56933, -- 燃烧射击
+            50132, -- 吸取魔法
+            56860, -- 魔法燃烧
+            47700, -- 水晶冻结
+            19134, -- Frightening Shout
+            60067, -- Charge
+            -56837, -- 寒冰箭
+            -38384, -- 冰锥术
+            -48053, -- 诱捕
+            -30633, -- 雷霆一击
+            47698, -- Crystal Chains
+            39171, -- Mortal Strike
+            30849, -- Spell Lock
+            17682, -- Drain Mana
+            36808, -- Rain of Fire
+            13323, -- Polymorph
+        },
+        [617] = { -- 指挥官斯托比德
+        },
+        [833] = { -- 指挥官库鲁尔格
+        },
+        [618] = { -- 大魔导师泰蕾丝塔
+            47731, -- 家畜
+            56935, -- 寒冰新星
+            47736, -- 时间停止
+            -56936, -- 暴风雪
+        },
+        [619] = { -- 阿诺玛鲁斯
+            57063, -- 奥术吸引
+        },
+        [620] = { -- 塑树者奥莫洛克
+            61556, -- 混乱
+        },
+        [621] = { -- 克莉斯塔萨
+            48179, -- 晶化
+            57091, -- 水晶烈焰吐息
+            48095, -- 极度冰寒
+        },
+    },
+
+    [282] = { -- 魔环
+        ["general"] = {
+            50690, -- 大地静止
+            38047, -- 精神扭曲
+            50731, -- 锤击
+            59260, -- 钩网
+            54074, -- 致伤药膏
+            59269, -- 血肉撕咬
+            59211, -- 寒冰之光
+            -50535, -- 吸取能量
+            -59278, -- 暴风雪
+            15588, -- Thunderclap
+            32323, -- Charge
+            16102, -- Flamestrike
+            50732, -- Water Tomb
+        },
+        [622] = { -- 审讯者达库斯
+        },
+        [623] = { -- 瓦尔洛斯·云击
+            59371, -- 魔法增效
+        },
+        [624] = { -- 法师领主伊洛姆
+            59376, -- 定时炸弹
+            58025, -- 冰霜打击
+            -51103, -- 寒冰炸弹
+        },
+        [625] = { -- 魔网守护者埃雷苟斯
+        },
+    },
+}
+
+-- WotLK Fix: Defer loading until F.LoadBuiltInDebuffs is available
+if F.LoadBuiltInDebuffs then
+    F.LoadBuiltInDebuffs(debuffs)
+else
+    Cell.RegisterCallback("RaidDebuffsReady", "RaidDebuffs_WotLK_LoadBuiltIn", function()
+        if F.LoadBuiltInDebuffs then
+            F.LoadBuiltInDebuffs(debuffs)
+        end
+    end)
+end

@@ -1,0 +1,576 @@
+local _, Cell = ...
+--! WotLK fix: bind Cell timers privately so standalone !!!ClassicAPI cannot change semantics.
+local C_Timer = Cell.C_Timer
+local F = Cell.funcs
+local B = Cell.bFuncs
+local P = Cell.pixelPerfectFuncs
+
+local partyFrame = CreateFrame("Frame", "CellPartyFrame", Cell.frames.mainFrame, "SecureFrameTemplate")
+Cell.frames.partyFrame = partyFrame
+partyFrame:SetAllPoints(Cell.frames.mainFrame)
+
+local header = CreateFrame("Frame", "CellPartyFrameHeader", partyFrame, "SecureGroupHeaderTemplate")
+header:SetAttribute("template", "CellUnitButtonTemplate")
+
+function header:UpdateButtonUnit(bName, unit)
+    if not unit then
+        return
+    end
+
+    _G[bName].unit = unit -- OmniCD
+
+    local petUnit
+    if unit == "player" then
+        petUnit = "pet"
+    else
+        petUnit = string.gsub(unit, "party", "partypet")
+    end
+
+    Cell.unitButtons.party.units[unit] = _G[bName]
+    Cell.unitButtons.party.units[petUnit] = _G[bName].petButton
+end
+
+--! WotLK fix: 3.3.5 SecureGroupHeaderTemplate has no
+--! _initialAttribute-* child initialization mechanism. These party and pet
+--! buttons are created with fixed units below, so configure and register them
+--! directly in regular Lua instead of storing a dead restricted snippet.
+
+header:SetAttribute("point", "TOP")
+header:SetAttribute("xOffset", 0)
+header:SetAttribute("yOffset", -1)
+header:SetAttribute("maxColumns", 1)
+header:SetAttribute("unitsPerColumn", 5)
+--! WotLK 3.3.5a: DON'T set showPlayer/showParty - they trigger auto button creation!
+--! We create buttons manually below, so these must be commented out to avoid duplicate buttons
+-- header:SetAttribute("showPlayer", true)
+-- header:SetAttribute("showParty", true)
+
+--! WotLK 3.3.5a: SecureGroupHeaderTemplate doesn't create buttons automatically in WotLK
+--! Manually create 5 buttons for party members (player + 4 party members)
+--! Store them in a separate array to prevent auto-created buttons from overwriting
+local manualButtons = {}
+for i = 1, 5 do
+    local buttonName = "CellPartyFrameMember" .. i
+    local playerButton = CreateFrame("Button", buttonName, header, "CellUnitButtonTemplate,SecureUnitButtonTemplate")
+    playerButton:SetID(i)
+    manualButtons[i] = playerButton  -- Store in our own array
+    -- DO NOT set header[i] here - it gets overwritten by auto-created buttons!
+
+    local unit
+    if i == 1 then
+        unit = "player"
+    else
+        unit = "party" .. (i - 1)
+    end
+
+    playerButton:SetAttribute("unit", unit)
+    RegisterUnitWatch(playerButton)
+
+    -- Create pet button
+    local petButton = CreateFrame("Button", buttonName.."Pet", playerButton, "CellUnitButtonTemplate")
+    --! WotLK fix: parent-alpha isolation is unavailable on 3.3.5.
+    petButton:SetAttribute("toggleForVehicle", false)
+
+    local petUnit
+    if i == 1 then
+        petUnit = "pet"
+    else
+        petUnit = "partypet" .. (i - 1)
+    end
+    petButton:SetAttribute("unit", petUnit)
+    RegisterUnitWatch(petButton)
+
+    playerButton.petButton = petButton
+    SecureHandlerSetFrameRef(playerButton, "petButton", petButton)
+
+    -- for IterateAllUnitButtons
+    Cell.unitButtons.party["player"..i] = playerButton
+    Cell.unitButtons.party["pet"..i] = petButton
+    --! WotLK fix: populate the fixed-unit lookup immediately; the removed
+    --! _initialAttribute-* snippet never ran on native 3.3.5 headers.
+    Cell.unitButtons.party.units[unit] = playerButton
+    Cell.unitButtons.party.units[petUnit] = petButton
+
+    -- OmniCD
+    _G[buttonName] = playerButton
+    playerButton.unit = unit
+end
+
+header:SetAttribute("startingIndex", 1)
+header:Show()
+
+-------------------------------------------------
+-- sort by role (3.3.5)
+-------------------------------------------------
+--! WotLK fix: "Sort By Role" was dead for party frames on 3.3.5 in TWO ways: the header
+--! sorting attributes (sortMethod/groupingOrder/groupBy) only affect header-MANAGED
+--! children, while this backport creates the 5 party buttons manually with fixed units
+--! (player/party1-4); and groupBy="ASSIGNEDROLE" does not exist in 3.3.5 anyway (native
+--! groupBy knows GROUP/CLASS/ROLE=MAINTANK/MAINASSIST only). Sort by re-anchoring the
+--! manual buttons in role order instead (roles via Cell.UnitGroupRolesAssigned ->
+--! Cell/Libs/LibGroupInfo.lua). Re-anchoring protected frames happens out of combat only.
+local buttonOrder = {1, 2, 3, 4, 5}
+local ROLE_ORDER_FALLBACK = {"TANK", "HEALER", "DAMAGER"}
+
+local function UpdateButtonOrder(layout)
+    for i = 1, 5 do
+        buttonOrder[i] = i
+    end
+
+    if not layout["main"]["sortByRole"] then return end
+
+    local order = layout["main"]["roleOrder"] or ROLE_ORDER_FALLBACK
+    local prio = {}
+    for i, role in ipairs(order) do
+        prio[role] = i
+    end
+
+    -- sort by role priority, stable by original slot; empty slots and NONE go last
+    table.sort(buttonOrder, function(a, b)
+        local ua = manualButtons[a]:GetAttribute("unit")
+        local ub = manualButtons[b]:GetAttribute("unit")
+        local pa = (ua and UnitExists(ua) and prio[Cell.UnitGroupRolesAssigned(ua)]) or 10
+        local pb = (ub and UnitExists(ub) and prio[Cell.UnitGroupRolesAssigned(ub)]) or 10
+        if pa ~= pb then
+            return pa < pb
+        end
+        return a < b
+    end)
+end
+
+-- Ensure buttons know their unit attributes (OnAttributeChanged only fires on changes)
+local function ForceSyncPartyButtons()
+    for i = 1, 5 do
+        local button = manualButtons[i]
+        if button then
+            local unit = button:GetAttribute("unit")
+            if unit and button:GetScript("OnAttributeChanged") then
+                button:GetScript("OnAttributeChanged")(button, "unit", unit)
+            end
+
+            if button.petButton then
+                local petUnit = button.petButton:GetAttribute("unit")
+                if petUnit and button.petButton:GetScript("OnAttributeChanged") then
+                    button.petButton:GetScript("OnAttributeChanged")(button.petButton, "unit", petUnit)
+                end
+            end
+
+            -- kick indicator refresh if ready
+            button._updateRequired = 1
+            button._powerUpdateRequired = 1
+            if Cell.bFuncs and Cell.bFuncs.UpdateAll then
+                Cell.bFuncs.UpdateAll(button)
+            end
+        end
+    end
+end
+
+-- Manually trigger UpdateButtonUnit for each button to populate Cell.unitButtons.party.units
+Cell.C_Timer.After(0.1, function()
+    if not header.UpdateButtonUnit then return end
+    for i = 1, 5 do
+        local button = manualButtons[i]
+        if button then
+            local unit = button:GetAttribute("unit")
+            if unit then
+                header:UpdateButtonUnit(button:GetName(), unit)
+            end
+        end
+    end
+    ForceSyncPartyButtons()
+end)
+
+-- Trigger layout update after button creation
+-- NOTE: This ensures buttons are sized correctly after initial load
+Cell.C_Timer.After(0.5, function()
+    --! WotLK fix: route the startup retry through Core_Wrath's combat-aware
+    --! UpdateLayout owner; it queues the rebuild instead of touching protected
+    --! party attributes from this timer.
+    if Cell and F and F.UpdateLayout and (Cell.vars.groupType == "party" or Cell.vars.groupType == "solo") then
+        F.UpdateLayout(Cell.vars.groupType)
+    end
+end)
+
+local function PartyFrame_UpdateLayout(layout, which)
+    -- visibility
+    if Cell.vars.groupType ~= "party" or Cell.vars.isHidden then
+        Cell.UnregisterAttributeDriver(partyFrame, "state-visibility")
+        partyFrame:Hide()
+        return
+    else
+        --! WotLK fix: a constant "show" state driver is polled every 0.2s on
+        --! 3.3.5 and is redundant because Core already defers layout updates
+        --! until combat ends. Show this Cell-owned secure frame directly.
+        Cell.UnregisterAttributeDriver(partyFrame, "state-visibility")
+        partyFrame:Show()
+    end
+
+    --! WotLK 3.3.5a: Safety check for layout
+    if not layout or not CellDB or not CellDB["layouts"] or not CellDB["layouts"][layout] then
+        -- Layout not ready yet, retry later
+        Cell.C_Timer.After(0.5, function()
+            --! WotLK fix: retry through Core_Wrath so a combat transition is
+            --! queued centrally instead of broadcasting protected layout work.
+            if F and F.UpdateLayout then
+                F.UpdateLayout(Cell.vars.groupType or "party")
+            end
+        end)
+        return
+    end
+
+    -- update
+    layout = CellDB["layouts"][layout]
+
+    --! WotLK 3.3.5a: Re-register buttons with unit watch when layout updates
+    if not which then
+        for i = 1, 5 do
+            if manualButtons[i] then
+                local unit = manualButtons[i]:GetAttribute("unit")
+                if unit then
+                    -- Re-register unit watch to ensure button visibility
+                    RegisterUnitWatch(manualButtons[i])
+                    -- Update button unit registration
+                    if header.UpdateButtonUnit then
+                        header:UpdateButtonUnit(manualButtons[i]:GetName(), unit)
+                    end
+                end
+            end
+        end
+        ForceSyncPartyButtons()
+    end
+
+    -- anchor
+    --! WotLK fix: "sort" and "hideSelf" also re-run this branch - role order and the
+    --! hidden player button change the anchor chain (see the loop below)
+    if not which or which == "main-arrangement" or which == "pet-arrangement" or which == "sort" or which == "hideSelf" then
+        UpdateButtonOrder(layout)
+        local orientation = layout["main"]["orientation"]
+        local anchor = layout["main"]["anchor"]
+        local spacingX = layout["main"]["spacingX"]
+        local spacingY = layout["main"]["spacingY"]
+        local petSpacingX = layout["pet"]["sameArrangementAsMain"] and spacingX or layout["pet"]["spacingX"]
+        local petSpacingY = layout["pet"]["sameArrangementAsMain"] and spacingY or layout["pet"]["spacingY"]
+
+        local point, playerAnchorPoint, petAnchorPoint, playerSpacing, petSpacing, headerPoint
+        if orientation == "vertical" then
+            if anchor == "BOTTOMLEFT" then
+                point, playerAnchorPoint, petAnchorPoint = "BOTTOMLEFT", "TOPLEFT", "BOTTOMRIGHT"
+                headerPoint = "BOTTOM"
+                playerSpacing = spacingY
+                petSpacing = petSpacingX
+            elseif anchor == "BOTTOMRIGHT" then
+                point, playerAnchorPoint, petAnchorPoint = "BOTTOMRIGHT", "TOPRIGHT", "BOTTOMLEFT"
+                headerPoint = "BOTTOM"
+                playerSpacing = spacingY
+                petSpacing = -petSpacingX
+            elseif anchor == "TOPLEFT" then
+                point, playerAnchorPoint, petAnchorPoint = "TOPLEFT", "BOTTOMLEFT", "TOPRIGHT"
+                headerPoint = "TOP"
+                playerSpacing = -spacingY
+                petSpacing = petSpacingX
+            elseif anchor == "TOPRIGHT" then
+                point, playerAnchorPoint, petAnchorPoint = "TOPRIGHT", "BOTTOMRIGHT", "TOPLEFT"
+                headerPoint = "TOP"
+                playerSpacing = -spacingY
+                petSpacing = -petSpacingX
+            end
+
+            header:SetAttribute("xOffset", 0)
+            header:SetAttribute("yOffset", P.Scale(playerSpacing))
+        else
+            -- anchor
+            if anchor == "BOTTOMLEFT" then
+                point, playerAnchorPoint, petAnchorPoint = "BOTTOMLEFT", "BOTTOMRIGHT", "TOPLEFT"
+                headerPoint = "LEFT"
+                playerSpacing = spacingX
+                petSpacing = petSpacingY
+            elseif anchor == "BOTTOMRIGHT" then
+                point, playerAnchorPoint, petAnchorPoint = "BOTTOMRIGHT", "BOTTOMLEFT", "TOPRIGHT"
+                headerPoint = "RIGHT"
+                playerSpacing = -spacingX
+                petSpacing = petSpacingY
+            elseif anchor == "TOPLEFT" then
+                point, playerAnchorPoint, petAnchorPoint = "TOPLEFT", "TOPRIGHT", "BOTTOMLEFT"
+                headerPoint = "LEFT"
+                playerSpacing = spacingX
+                petSpacing = -petSpacingY
+            elseif anchor == "TOPRIGHT" then
+                point, playerAnchorPoint, petAnchorPoint = "TOPRIGHT", "TOPLEFT", "BOTTOMRIGHT"
+                headerPoint = "RIGHT"
+                playerSpacing = -spacingX
+                petSpacing = -petSpacingY
+            end
+
+            header:SetAttribute("xOffset", P.Scale(playerSpacing))
+            header:SetAttribute("yOffset", 0)
+        end
+
+        header:ClearAllPoints()
+        header:SetPoint(point)
+        header:SetAttribute("point", headerPoint)
+
+        --! WotLK 3.3.5a: SecureGroupHeaderTemplate doesn't position buttons automatically in WotLK
+        --! Manually position each button
+        --! WotLK fix: iterate in buttonOrder (role sorting) and chain each button to the
+        --! previous CHAINED one; the player button leaves the chain when hideSelf is on,
+        --! so the remaining buttons collapse over its slot instead of leaving a gap
+        local last
+        for j = 1, 5 do
+            local idx = buttonOrder[j]
+            local b = manualButtons[idx]
+            if b then
+                b:ClearAllPoints()
+
+                if layout["main"]["hideSelf"] and idx == 1 then
+                    -- hidden via UnregisterUnitWatch (hideSelf branch below) - park it
+                    -- on the header and keep it out of the anchor chain
+                    b:SetPoint(point, header, headerPoint, 0, 0)
+                else
+                    if not last then
+                        -- First chained button anchors its corner to header
+                        b:SetPoint(point, header, headerPoint, 0, 0)
+                    else
+                        -- Subsequent buttons anchor to the previous chained button
+                        if orientation == "vertical" then
+                            b:SetPoint(point, last, playerAnchorPoint, 0, P.Scale(playerSpacing))
+                        else
+                            b:SetPoint(point, last, playerAnchorPoint, P.Scale(playerSpacing), 0)
+                        end
+                    end
+                    last = b
+                end
+
+                -- Position pet button
+                if b.petButton then
+                    b.petButton:ClearAllPoints()
+                    if orientation == "vertical" then
+                        b.petButton:SetPoint(point, b, petAnchorPoint, P.Scale(petSpacing), 0)
+                    else
+                        b.petButton:SetPoint(point, b, petAnchorPoint, 0, P.Scale(petSpacing))
+                    end
+                end
+            end
+        end
+
+        header:SetAttribute("unitsPerColumn", 5)
+    end
+
+    if not which or strfind(which, "size$") or strfind(which, "power$") or which == "barOrientation" or which == "powerFilter" then
+        for i, playerButton in ipairs(manualButtons) do
+            local petButton = playerButton.petButton
+
+            if not which or strfind(which, "size$") then
+                local width, height = unpack(layout["main"]["size"])
+                P.Size(playerButton, width, height)
+                header:SetAttribute("buttonWidth", P.Scale(width))
+                header:SetAttribute("buttonHeight", P.Scale(height))
+
+                -- Debug actual button size
+                -- local actualWidth, actualHeight = playerButton:GetSize()
+                -- F.Debug("|cffff8800Button"..i.." - Actual size after P.Size:|r", actualWidth, "x", actualHeight)
+
+                if layout["pet"]["sameSizeAsMain"] then
+                    P.Size(petButton, width, height)
+                else
+                    P.Size(petButton, layout["pet"]["size"][1], layout["pet"]["size"][2])
+                end
+            end
+
+            -- NOTE: SetOrientation BEFORE SetPowerSize
+            if not which or which == "barOrientation" then
+                B.SetOrientation(playerButton, layout["barOrientation"][1], layout["barOrientation"][2])
+                B.SetOrientation(petButton, layout["barOrientation"][1], layout["barOrientation"][2])
+            end
+
+            if not which or strfind(which, "power$") or which == "barOrientation" or which == "powerFilter" then
+                B.SetPowerSize(playerButton, layout["main"]["powerSize"])
+                if layout["pet"]["sameSizeAsMain"] then
+                    B.SetPowerSize(petButton, layout["main"]["powerSize"])
+                else
+                    B.SetPowerSize(petButton, layout["pet"]["powerSize"])
+                end
+            end
+        end
+    end
+
+    if not which or which == "pet" then
+        header:SetAttribute("showPartyPets", layout["pet"]["partyEnabled"])
+        header:SetAttribute("partyDetached", layout["pet"]["partyDetached"])
+        if layout["pet"]["partyEnabled"] and not layout["pet"]["partyDetached"] then
+            for i, playerButton in ipairs(manualButtons) do
+                RegisterUnitWatch(playerButton.petButton)
+            end
+        else
+            for i, playerButton in ipairs(manualButtons) do
+                UnregisterUnitWatch(playerButton.petButton)
+                playerButton.petButton:Hide()
+            end
+        end
+    end
+
+    --! WotLK fix: the old "sort" branch set header sorting attributes here
+    --! (sortMethod/groupingOrder/groupBy="ASSIGNEDROLE") - useless on 3.3.5: the party
+    --! buttons are manual (not header-managed) and ASSIGNEDROLE doesn't exist anyway.
+    --! Role sorting is now done by the anchor branch above (which also runs on "sort").
+
+    if not which or which == "hideSelf" then
+        --! WotLK 3.3.5a: Don't use showPlayer attribute - it triggers auto button creation
+        --! Instead, manually show/hide the first button (player button)
+        --! WotLK fix: a bare Hide() never worked - the player button is driven by
+        --! RegisterUnitWatch (see button creation above), and the watch re-shows it
+        --! right away because unit "player" always exists. Toggle the watch itself:
+        --! unregister + hide to conceal, re-register to restore (the watch evaluates
+        --! immediately on register and shows the button again).
+        if layout["main"]["hideSelf"] then
+            UnregisterUnitWatch(manualButtons[1])
+            manualButtons[1]:Hide()
+        else
+            RegisterUnitWatch(manualButtons[1])
+        end
+    end
+
+    -- Debug final button states
+    -- F.Debug("|cffff8800=== PartyFrame Button Status ===")
+    -- F.Debug("|cffff8800Header IsVisible:|r", header:IsVisible(), "|cffff8800PartyFrame IsVisible:|r", partyFrame:IsVisible())
+    -- for i, playerButton in ipairs(header) do
+    --     local unit = playerButton:GetAttribute("unit")
+    --     local isVisible = playerButton:IsVisible()
+    --     local isShown = playerButton:IsShown()
+    --     local width, height = playerButton:GetSize()
+    --     F.Debug("|cffff8800Button"..i..":|r Unit:", unit or "NONE", "IsVisible:", isVisible, "IsShown:", isShown, "Size:", width.."x"..height)
+    -- end
+    -- F.Debug("|cffff8800=== PartyFrame_UpdateLayout END ===")
+end
+Cell.RegisterCallback("UpdateLayout", "PartyFrame_UpdateLayout", PartyFrame_UpdateLayout)
+
+--! WotLK fix: keep party role sorting fresh - roles arrive asynchronously from
+--! LibGroupInfo inspects and members join/leave. Re-anchor out of combat only.
+local partySortTimer
+local partySortFrame = CreateFrame("Frame")
+partySortFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
+--! WotLK fix: do not depend on standalone !!!ClassicAPI's synthetic
+--! PLAYER_ROLES_ASSIGNED route; Cell-private LibGroupInfo reports fresh roles.
+partySortFrame:SetScript("OnEvent", function(self, event)
+    if event == "PLAYER_REGEN_ENABLED" then
+        self:UnregisterEvent("PLAYER_REGEN_ENABLED")
+    end
+
+    local layout = Cell.vars.currentLayoutTable
+    if not layout or not layout["main"] or not layout["main"]["sortByRole"] then return end
+    if Cell.vars.groupType ~= "party" or Cell.vars.isHidden then return end
+
+    if InCombatLockdown() then --! protected frames cannot be re-anchored in combat
+        self:RegisterEvent("PLAYER_REGEN_ENABLED")
+        return
+    end
+
+    -- debounce: roster/role events arrive in bursts
+    if partySortTimer then partySortTimer:Cancel() end
+    partySortTimer = Cell.C_Timer.NewTimer(0.2, function()
+        partySortTimer = nil
+        local lo = Cell.vars.currentLayoutTable
+        if lo and lo["main"] and lo["main"]["sortByRole"]
+            and Cell.vars.groupType == "party" and not Cell.vars.isHidden then
+            if InCombatLockdown() then
+                partySortFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+            else
+                PartyFrame_UpdateLayout(Cell.vars.currentLayout, "sort")
+            end
+        end
+    end)
+end)
+
+--! WotLK fix: refresh manual button anchors when Cell's own inspect cache
+--! learns a role, independent of which ClassicAPI copy loaded first.
+do
+    local LGI = LibStub and LibStub:GetLibrary("LibGroupInfo", true)
+    if LGI then
+        LGI.RegisterCallback("CellPartyFrame_RoleSort", "GroupInfo_Update", function()
+            partySortFrame:GetScript("OnEvent")(partySortFrame, "GroupInfo_Update")
+        end)
+    end
+
+    --! WotLK fix: same for the foreign LibGroupTalents source - a party member
+    --! out of inspect range gets a role only from that library, and only after
+    --! its addon-comm reply arrives.
+    if Cell.RegisterLGTRoleCallback then
+        Cell.RegisterLGTRoleCallback(function()
+            partySortFrame:GetScript("OnEvent")(partySortFrame, "GroupInfo_Update")
+        end)
+    end
+end
+
+-- local function PartyFrame_UpdateVisibility(which)
+--     if not which or which == "party" then
+--         header:SetAttribute("showParty", CellDB["general"]["showParty"])
+--         if CellDB["general"]["showParty"] then
+--             --! [group] won't fire during combat
+--             -- Cell.RegisterAttributeDriver(partyFrame, "state-visibility", "[group:raid] hide; [group:party] show; hide")
+--             -- NOTE: [group:party] show: fix for premade, only player in party, but party1 not exists
+--             Cell.RegisterAttributeDriver(partyFrame, "state-visibility", "[@raid1,exists] hide;[@party1,exists] show;[group:party] show;hide")
+--         else
+--             Cell.UnregisterAttributeDriver(partyFrame, "state-visibility")
+--             partyFrame:Hide()
+--         end
+--     end
+-- end
+-- Cell.RegisterCallback("UpdateVisibility", "PartyFrame_UpdateVisibility", PartyFrame_UpdateVisibility)
+
+-- local f = CreateFrame("Frame", nil, CellParent, "SecureFrameTemplate")
+-- Cell.RegisterAttributeDriver(f, "state-group", "[@raid1,exists] raid;[@party1,exists] party; solo")
+-- SecureHandlerWrapScript(f, "OnAttributeChanged", f, [[
+--     print(name, value)
+--     if name ~= "state-group" then return end
+-- ]])
+
+-- RegisterStateDriver(f, "groupstate", "[group:raid] raid; [group:party] party; solo")
+-- f:SetAttribute("_onstate-groupstate", [[
+--     print(stateid, newstate)
+-- ]])
+
+-- WotLK Fix: Force update party buttons when entering party group type
+-- The Cell.RegisterAttributeDriver visibility state doesn't always sync properly after leaving BG/raid
+local function PartyFrame_GroupTypeChanged(groupType)
+    if groupType == "party" then
+        -- Force update after a delay to ensure frame is visible
+        Cell.C_Timer.After(0.5, function()
+            --! WotLK fix: this timer may outlive its group transition or fire
+            --! after combat starts. Abort stale/hidden work and let Core_Wrath
+            --! perform the authoritative protected rebuild after combat.
+            if Cell.vars.groupType ~= "party" or Cell.vars.isHidden then return end
+            if InCombatLockdown() then
+                F.UpdateLayout("party")
+                return
+            end
+
+            -- Force show the frame if not visible
+            if not partyFrame:IsVisible() then
+                partyFrame:Show()
+            end
+            -- Force update all party buttons
+            for i = 1, 5 do
+                local button = manualButtons[i]
+                if button then
+                    if button:IsVisible() then
+                        button._updateRequired = 1
+                        button._powerUpdateRequired = 1
+                        if button._indicatorsReady and Cell.bFuncs and Cell.bFuncs.UpdateAll then
+                            Cell.bFuncs.UpdateAll(button)
+                        end
+                    end
+                    -- Also update pet button
+                    if button.petButton and button.petButton:IsVisible() then
+                        button.petButton._updateRequired = 1
+                        button.petButton._powerUpdateRequired = 1
+                        if button.petButton._indicatorsReady and Cell.bFuncs and Cell.bFuncs.UpdateAll then
+                            Cell.bFuncs.UpdateAll(button.petButton)
+                        end
+                    end
+                end
+            end
+            -- Ensure unit attributes are synced and buttons refresh even if they never received OnAttributeChanged
+            ForceSyncPartyButtons()
+        end)
+    end
+end
+Cell.RegisterCallback("GroupTypeChanged", "PartyFrame_GroupTypeChanged", PartyFrame_GroupTypeChanged)

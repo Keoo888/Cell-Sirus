@@ -1,0 +1,561 @@
+local _, Cell = ...
+local L = Cell.L
+---@type CellFuncs
+local F = Cell.funcs
+---@class CellIndicatorFuncs
+local I = Cell.iFuncs
+
+-------------------------------------------------
+-- custom indicators
+-------------------------------------------------
+local enabledIndicators = {}
+local customIndicators = {
+    ["buff"] = {},
+    ["debuff"] = {},
+}
+
+Cell.snippetVars.enabledIndicators = enabledIndicators
+Cell.snippetVars.customIndicators = customIndicators
+
+--! WotLK perf: entries per half, so the hot aura path can skip an empty one instead of
+--! setting up pairs() for nothing. Written by all three writers of customIndicators in
+--! this file; counts entries, not enabled ones. See GAP-130 / STUDY_PERFORMANCE 10.24.
+local customIndicatorNum = {
+    ["buff"] = 0,
+    ["debuff"] = 0,
+}
+
+--! init enabledIndicators & customIndicators
+function I.UpdateIndicatorTable(indicatorTable)
+    local indicatorName = indicatorTable["indicatorName"]
+    local auraType = indicatorTable["auraType"]
+
+    if not customIndicators[auraType][indicatorName] then
+        customIndicatorNum[auraType] = customIndicatorNum[auraType] + 1
+    end
+
+    -- keep custom indicators in table
+    if indicatorTable["enabled"] then enabledIndicators[indicatorName] = true end
+
+    -- NOTE: icons is different from other custom indicators, more like the Debuffs indicator
+    if indicatorTable["type"] == "icons" then
+        customIndicators[auraType][indicatorName] = {
+            ["auras"] = F.ConvertSpellTable(indicatorTable["auras"], indicatorTable["trackByName"]), -- auras to match
+            ["found"] = {},
+            ["num"] = indicatorTable["num"],
+        }
+    elseif indicatorTable["type"] == "bars" or indicatorTable["type"] == "blocks" then
+        customIndicators[auraType][indicatorName] = {
+            ["auras"] = F.ConvertSpellTable_WithColor(indicatorTable["auras"], indicatorTable["trackByName"]), -- auras to match
+            ["hasColor"] = true,
+            ["found"] = {},
+            ["num"] = indicatorTable["num"],
+        }
+    elseif indicatorTable["type"] == "border" then
+        customIndicators[auraType][indicatorName] = {
+            ["auras"] = F.ConvertSpellTable_WithColor(indicatorTable["auras"], indicatorTable["trackByName"]), -- auras to match
+            ["hasColor"] = true,
+            ["top"] = {},
+            ["topOrder"] = {},
+        }
+    else
+        customIndicators[auraType][indicatorName] = {
+            ["auras"] = F.ConvertSpellTable(indicatorTable["auras"], indicatorTable["trackByName"]), -- auras to match
+            ["top"] = {}, -- top aura details
+            ["topOrder"] = {}, -- top aura order
+        }
+    end
+
+    customIndicators[auraType][indicatorName]["name"] = indicatorTable["name"]
+    customIndicators[auraType][indicatorName]["type"] = indicatorTable["type"]
+    customIndicators[auraType][indicatorName]["castBy"] = indicatorTable["castBy"]
+
+    if auraType == "buff" then
+        customIndicators[auraType][indicatorName]["_auras"] = F.Copy(indicatorTable["auras"]) --* save ids
+        customIndicators[auraType][indicatorName]["trackByName"] = indicatorTable["trackByName"]
+    end
+end
+
+function I.CreateIndicator(parent, indicatorTable)
+    local indicatorName = indicatorTable["indicatorName"]
+    local indicator
+    if indicatorTable["type"] == "icon" then
+        indicator = I.CreateAura_BarIcon(nil, parent.widgets.indicatorFrame)
+    elseif indicatorTable["type"] == "text" then
+        indicator = I.CreateAura_Text(nil, parent.widgets.indicatorFrame)
+    elseif indicatorTable["type"] == "bar" then
+        indicator = I.CreateAura_Bar(nil, parent.widgets.indicatorFrame)
+    elseif indicatorTable["type"] == "bars" then
+        indicator = I.CreateAura_Bars(nil, parent.widgets.indicatorFrame, 10)
+    elseif indicatorTable["type"] == "rect" then
+        indicator = I.CreateAura_Rect(nil, parent.widgets.indicatorFrame)
+    elseif indicatorTable["type"] == "icons" then
+        indicator = I.CreateAura_Icons(nil, parent.widgets.indicatorFrame, 10)
+    elseif indicatorTable["type"] == "color" then
+        indicator = I.CreateAura_Color(nil, parent)
+    elseif indicatorTable["type"] == "texture" then
+        indicator = I.CreateAura_Texture(nil, parent.widgets.indicatorFrame)
+    elseif indicatorTable["type"] == "glow" then
+        indicator = I.CreateAura_Glow(nil, parent.widgets.highLevelFrame)
+    elseif indicatorTable["type"] == "overlay" then
+        indicator = I.CreateAura_Overlay(nil, parent)
+    elseif indicatorTable["type"] == "block" then
+        indicator = I.CreateAura_Block(nil, parent.widgets.indicatorFrame)
+    elseif indicatorTable["type"] == "blocks" then
+        indicator = I.CreateAura_Blocks(nil, parent.widgets.indicatorFrame, 10)
+    elseif indicatorTable["type"] == "border" then
+        indicator = I.CreateAura_Border(nil, parent.widgets.highLevelFrame)
+    end
+    parent.indicators[indicatorName] = indicator
+
+    return indicator
+end
+
+function I.RemoveIndicator(parent, indicatorName, auraType)
+    local indicator = parent.indicators[indicatorName]
+    indicator:ClearAllPoints()
+    indicator:Hide()
+    indicator:SetParent(nil)
+    parent.indicators[indicatorName] = nil
+    enabledIndicators[indicatorName] = nil
+    --! WotLK perf: called once per button, so count down only on the first one, while
+    --! the shared entry is still there.
+    if customIndicators[auraType][indicatorName] then
+        customIndicatorNum[auraType] = customIndicatorNum[auraType] - 1
+    end
+    customIndicators[auraType][indicatorName] = nil
+end
+
+-- used for switching to a new layout
+--! WotLK perf: a frame can never be destroyed on 3.3.5a -- SetParent(nil) only
+--! orphans it, the client keeps it in its own frame list forever. Upstream drops
+--! every custom indicator here and HandleIndicators then rebuilds each one through
+--! `b.indicators[name] or I.CreateIndicator(b, t)` (UnitButton_Cata_Wrath.lua),
+--! and because this loop has just nil'ed the table entry the `or` branch always
+--! wins: a brand-new anonymous frame per custom indicator per button on every
+--! layout or group-type switch, with the previous set leaked. It fires more often
+--! than "switching to a new layout" suggests -- solo to party to raid counts, and
+--! so does every 10/25 change, i.e. several times per raid night. With the second
+--! argument the caller can hand over the incoming layout table; anything whose
+--! indicatorName AND type both survive the switch is kept and reused, so nothing
+--! is created and nothing is leaked. Name alone is not enough: the same
+--! indicatorName may come back as a different type, and that frame really does
+--! have to be replaced. Without the argument the old behaviour is unchanged,
+--! which is what the preview button in Indicators.lua wants.
+function I.RemoveAllCustomIndicators(parent, indicatorTables)
+    -- if parent ~= CellIndicatorsPreviewButton then
+    --     wipe(enabledIndicators)
+    --     wipe(customIndicators["buff"])
+    --     wipe(customIndicators["debuff"])
+    -- end
+
+    local reusable
+    if indicatorTables then
+        reusable = {}
+        --! Custom indicators live in the tail past the built-in block; that is the
+        --! same convention I.ResetCustomIndicatorTables uses below, and Revise.lua
+        --! keeps the block at exactly builtIns records on every load.
+        for i = Cell.defaults.builtIns + 1, #indicatorTables do
+            local t = indicatorTables[i]
+            if t and t["indicatorName"] then
+                reusable[t["indicatorName"]] = t["type"]
+            end
+        end
+    end
+
+    for indicatorName, indicator in pairs(parent.indicators) do
+        if string.find(indicatorName, "^indicator") then
+            --! Both halves must be present, not just equal: a nil == nil match would
+            --! keep an indicator that the incoming layout does not contain at all.
+            local wantedType = reusable and reusable[indicatorName]
+            if wantedType and wantedType == (indicator.configs and indicator.configs["type"]) then
+                --! Keep the frame, but put it back into the state a freshly created
+                --! one would be in: hidden, children hidden too (Hide(true) reaches
+                --! them on icons/bars/blocks). HandleIndicators re-applies every
+                --! setting from the new layout right after this, and the aura pass
+                --! that follows re-shows whatever should be visible. Without this a
+                --! custom indicator disabled in the incoming layout would keep
+                --! hanging on the frame with its last aura frozen in place: nothing
+                --! downstream touches it any more, since ResetCustomIndicatorTables
+                --! has just dropped it from enabledIndicators.
+                indicator:Hide(true)
+            else
+                indicator:ClearAllPoints()
+                indicator:Hide()
+                indicator:SetParent(nil)
+                parent.indicators[indicatorName] = nil
+            end
+        end
+    end
+end
+
+function I.ResetCustomIndicatorTables()
+    -- clear
+    wipe(enabledIndicators)
+    wipe(customIndicators["buff"])
+    wipe(customIndicators["debuff"])
+    --! WotLK perf: both halves are empty again, so are their counters; the loop below
+    --! re-adds through I.UpdateIndicatorTable, which counts back up.
+    customIndicatorNum["buff"] = 0
+    customIndicatorNum["debuff"] = 0
+
+    -- update customs
+    for i = Cell.defaults.builtIns + 1, #Cell.vars.currentLayoutTable.indicators do
+        I.UpdateIndicatorTable(Cell.vars.currentLayoutTable.indicators[i])
+    end
+end
+
+--! WotLK fix: Cell.Fire dispatches callback listeners with pairs(), whose
+--! order is not a cache-before-redraw contract on Lua 5.1. Keep this updater
+--! on Cell's private indicator surface so UnitButton_UpdateIndicators can call
+--! it synchronously before refreshing visible buttons.
+function I.UpdateCustomIndicatorSettings(layout, indicatorName, setting, value, value2)
+    if layout and layout ~= Cell.vars.currentLayout then return end
+
+    if not indicatorName or not string.find(indicatorName, "^indicator") then return end
+
+    if setting == "enabled" then
+        if value then
+            enabledIndicators[indicatorName] = true
+        else
+            enabledIndicators[indicatorName] = nil
+        end
+    elseif setting == "auras" then
+        customIndicators[value][indicatorName]["_auras"] = F.Copy(value2) --* save ids
+        if customIndicators[value][indicatorName]["hasColor"] then
+            customIndicators[value][indicatorName]["auras"] = F.ConvertSpellTable_WithColor(value2, customIndicators[value][indicatorName]["trackByName"])
+        else
+            customIndicators[value][indicatorName]["auras"] = F.ConvertSpellTable(value2, customIndicators[value][indicatorName]["trackByName"])
+        end
+    elseif setting == "checkbutton" then
+        if customIndicators["buff"][indicatorName] then
+            customIndicators["buff"][indicatorName][value] = value2
+            if value == "trackByName" then
+                if customIndicators["buff"][indicatorName]["hasColor"] then
+                    customIndicators["buff"][indicatorName]["auras"] = F.ConvertSpellTable_WithColor(customIndicators["buff"][indicatorName]["_auras"], value2)
+                else
+                    customIndicators["buff"][indicatorName]["auras"] = F.ConvertSpellTable(customIndicators["buff"][indicatorName]["_auras"], value2)
+                end
+            end
+        elseif customIndicators["debuff"][indicatorName] then
+            customIndicators["debuff"][indicatorName][value] = value2
+        end
+    else -- num, castBy
+        if customIndicators["buff"][indicatorName] then
+            customIndicators["buff"][indicatorName][setting] = value
+        elseif customIndicators["debuff"][indicatorName] then
+            customIndicators["debuff"][indicatorName][setting] = value
+        end
+    end
+end
+
+-------------------------------------------------
+-- found rows
+-------------------------------------------------
+--! WotLK perf: the "num" custom indicators used to allocate one fresh table per
+--! matched aura, per unit, per aura scan, and throw every one of them away on the
+--! next scan. In a 40-man raid with a couple of tracked auras each that is a steady
+--! stream of short-lived tables handed to the Lua 5.1 collector on a client with no
+--! JIT. The rows are pure value carriers: I.ShowCustomIndicators is their only
+--! reader and it copies the scalars out through SetCooldown without keeping a
+--! reference, so a row is dead the moment the next reset comes round. Recycle them
+--! through a plain stack instead of allocating. All eight slots are written on every
+--! acquire - slot 8 explicitly nil for an indicator without colors - so a recycled
+--! row can never carry the color of whichever indicator used it before.
+local rowPool = {}
+
+local function AcquireRow(order, start, duration, debuffType, icon, count, refreshing, color)
+    local n = #rowPool
+    local row = rowPool[n]
+    if not row then
+        return {order, start, duration, debuffType, icon, count, refreshing, color}
+    end
+    rowPool[n] = nil
+    row[1] = order
+    row[2] = start
+    row[3] = duration
+    row[4] = debuffType
+    row[5] = icon
+    row[6] = count
+    row[7] = refreshing
+    row[8] = color
+    return row
+end
+
+--! Clears the slot before pushing, so calling this twice on the same list (a reset
+--! that finds nothing to repopulate) cannot put one row into the pool twice and
+--! hand the same table out as two different rows.
+local function ReleaseRows(t)
+    for i = #t, 1, -1 do
+        local row = t[i]
+        t[i] = nil
+        rowPool[#rowPool+1] = row
+    end
+end
+
+-------------------------------------------------
+-- reset
+-------------------------------------------------
+function I.ResetCustomIndicators(unitButton, auraType)
+    if customIndicatorNum[auraType] == 0 then return end --! WotLK perf: nothing of this type exists
+
+    local unit = unitButton.states.displayedUnit
+
+    for indicatorName, indicatorTable in pairs(customIndicators[auraType]) do
+        if enabledIndicators[indicatorName] and unitButton.indicators[indicatorName] then
+            unitButton.indicators[indicatorName]:Hide(true)
+            if indicatorTable["num"] then
+                if not indicatorTable["found"][unit] then
+                    indicatorTable["found"][unit] = {}
+                else
+                    ReleaseRows(indicatorTable["found"][unit])
+                end
+            else
+                indicatorTable["topOrder"][unit] = 999
+                if not indicatorTable["top"][unit] then
+                    indicatorTable["top"][unit] = {}
+                else
+                    wipe(indicatorTable["top"][unit])
+                end
+            end
+        end
+    end
+end
+
+-------------------------------------------------
+-- update
+-------------------------------------------------
+--! WotLK fix: when an aura matches only via the wildcard entry ("0" = all
+--! auras), indicatorTable["auras"][spell] is nil - the old code then crashed
+--! on nil indexing/comparison ("auras[spell][1]", "auras[spell] < topOrder")
+--! on EVERY aura update, killing the whole aura pipeline and making custom
+--! indicators appear completely dead. Fall back to the wildcard entry's own
+--! data (auras[0]) for order/color, mirroring the nil-safe comparator above.
+local function Update(indicator, indicatorTable, unit, spell, start, duration, debuffType, icon, count, refreshing)
+    local auraData = indicatorTable["auras"][spell] or indicatorTable["auras"][0]
+    if indicatorTable["num"] then
+        --! WotLK perf: pooled row instead of a fresh table per match, and a direct
+        --! append instead of tinsert - the list is a proper sequence here, so the
+        --! extra C call bought nothing.
+        local t = indicatorTable["found"][unit]
+        if indicatorTable["hasColor"] then
+            t[#t+1] = AcquireRow(auraData and auraData[1], start, duration, debuffType, icon, count, refreshing, auraData and auraData[2])
+        else
+            t[#t+1] = AcquireRow(auraData, start, duration, debuffType, icon, count, refreshing, nil)
+        end
+    else
+        if indicatorTable["hasColor"] then
+            local order = auraData and auraData[1] or 999
+            if order <= indicatorTable["topOrder"][unit] then
+                indicatorTable["topOrder"][unit] = order
+                indicatorTable["top"][unit]["start"] = start
+                indicatorTable["top"][unit]["duration"] = duration
+                indicatorTable["top"][unit]["debuffType"] = debuffType
+                indicatorTable["top"][unit]["texture"] = icon
+                indicatorTable["top"][unit]["count"] = count
+                indicatorTable["top"][unit]["refreshing"] = refreshing
+                indicatorTable["top"][unit]["color"] = auraData and auraData[2]
+            end
+        else
+            local order = auraData or 999
+            if type(order) ~= "number" then order = 999 end
+            if order <= indicatorTable["topOrder"][unit] then
+                indicatorTable["topOrder"][unit] = order
+                indicatorTable["top"][unit]["start"] = start
+                indicatorTable["top"][unit]["duration"] = duration
+                indicatorTable["top"][unit]["debuffType"] = debuffType
+                indicatorTable["top"][unit]["texture"] = icon
+                indicatorTable["top"][unit]["count"] = count
+                indicatorTable["top"][unit]["refreshing"] = refreshing
+            end
+        end
+    end
+end
+
+function I.UpdateCustomIndicators(unitButton, auraType, spellId, spellName, start, duration, debuffType, icon, count, refreshing, castByMe)
+    if customIndicatorNum[auraType] == 0 then return end --! WotLK perf: nothing of this type exists
+
+    local unit = unitButton.states.displayedUnit
+
+    for indicatorName, indicatorTable in pairs(customIndicators[auraType]) do
+        if indicatorName and enabledIndicators[indicatorName] and unitButton.indicators[indicatorName] then
+            local spell  --* trackByName
+            if indicatorTable["trackByName"] then
+                spell = spellName
+            else
+                spell = spellId
+            end
+
+            if indicatorTable["auras"][spell] or (indicatorTable["auras"][0] and duration ~= 0) then -- is in indicator spell list
+                -- check caster
+                if (indicatorTable["castBy"] == "me" and castByMe) or (indicatorTable["castBy"] == "others" and not castByMe) or (indicatorTable["castBy"] == "anyone") then
+                    if auraType == "buff" then
+                        Update(unitButton.indicators[indicatorName], indicatorTable, unit, spell, start, duration, debuffType, icon, count, refreshing)
+                    else -- debuff
+                        Update(unitButton.indicators[indicatorName], indicatorTable, unit, spell, start, duration, debuffType, icon, count, refreshing)
+                    end
+                end
+            end
+        end
+    end
+end
+
+-------------------------------------------------
+-- show
+-------------------------------------------------
+local sort = table.sort
+--! WotLK fix: entries for the wildcard aura ("0" / all auras) are inserted
+--! with a nil order (auras[spell] is nil for spells matched only by the
+--! wildcard), so "a[1] < b[1]" compared two nils and errored. Upstream Cell
+--! already guards this: fall back to comparing start time (a[2]) when
+--! either order is missing. Backported 1:1 from upstream Custom.lua.
+local function comparator(a, b)
+    if a[1] and b[1] then
+        return a[1] < b[1]
+    else
+        --! WotLK fix: upstream compares "a[2] <= b[2]" here, and a non-strict
+        --! comparator is a crash on Lua 5.1: quicksort in ltablib.c trusts the
+        --! order function to be a strict weak order and walks off the array when
+        --! it is not. Measured on real 5.1: four entries with equal start times
+        --! and no order make table.sort pass nil to the comparator - "attempt to
+        --! index local 'a' (a nil value)" - and this fires inside the aura
+        --! update, i.e. it kills the whole indicator pipeline for that frame.
+        --! Four equal starts are not exotic: auras with no duration are stored
+        --! as start = 0. "<" is a valid strict order (ties compare false both
+        --! ways) and orders ties no worse - table.sort is not stable anyway.
+        return a[2] < b[2]
+    end
+end
+
+function I.ShowCustomIndicators(unitButton, auraType)
+    if not unitButton._indicatorsReady then return end
+    if customIndicatorNum[auraType] == 0 then return end --! WotLK perf: nothing of this type exists
+
+    local unit = unitButton.states.displayedUnit
+    for indicatorName, indicatorTable in pairs(customIndicators[auraType]) do
+        local indicator = unitButton.indicators[indicatorName]
+        if indicator and enabledIndicators[indicatorName] then
+            if indicatorTable["num"] then
+                local t = indicatorTable["found"][unit]
+                if t[1] then
+                    sort(t, comparator)
+                    for i = 1, indicatorTable["num"] do
+                        if not t[i] then break end
+                        -- 1:order, 2:start, 3:duration, 4:debuffType, 5:icon, 6:count, 7:refreshing, 8:color
+                        indicator[i]:SetCooldown(t[i][2], t[i][3], t[i][4], t[i][5], t[i][6], t[i][7], t[i][8])
+                    end
+                    indicator:Show()
+                    indicator:UpdateSize()
+                end
+            else
+                if indicatorTable["top"][unit] and indicatorTable["top"][unit]["start"] then
+                    indicator:SetCooldown(
+                        indicatorTable["top"][unit]["start"],
+                        indicatorTable["top"][unit]["duration"],
+                        indicatorTable["top"][unit]["debuffType"],
+                        indicatorTable["top"][unit]["texture"],
+                        indicatorTable["top"][unit]["count"],
+                        indicatorTable["top"][unit]["refreshing"],
+                        indicatorTable["top"][unit]["color"]
+                    )
+                end
+            end
+        end
+    end
+end
+
+--[=[
+function I.ResetCustomIndicators(unit, auraType)
+    for indicatorName, indicatorTable in pairs(customIndicators[auraType]) do
+        if indicatorTable["isIcons"] then
+            indicatorTable["found"][unit] = 1
+        else
+            indicatorTable["topOrder"][unit] = 999
+            if not indicatorTable["top"][unit] then
+                indicatorTable["top"][unit] = {}
+            else
+                wipe(indicatorTable["top"][unit])
+            end
+        end
+    end
+end
+
+function I.CheckCustomIndicators(unit, unitButton, auraType, spellId, name, start, duration, debuffType, texture, count, refreshing, castByMe)
+    for indicatorName, indicatorTable in pairs(customIndicators[auraType]) do
+        if enabledIndicators[indicatorName] and unitButton.indicators[indicatorName] then
+            if indicatorTable["trackByName"] then spellId = name end --* wrath
+            if indicatorTable["auras"][spellId] or indicatorTable["auras"][0] then -- is in indicator spell list
+                if auraType == "buff" then
+                    -- check castByMe
+                    if indicatorTable["castByMe"] == castByMe then
+                        if indicatorTable["isIcons"] then
+                            if indicatorTable["found"][unit] <= indicatorTable["num"] then
+                                unitButton.indicators[indicatorName]:UpdateSize(indicatorTable["found"][unit])
+                                unitButton.indicators[indicatorName][indicatorTable["found"][unit]]:SetCooldown(start, duration, debuffType, texture, count, refreshing)
+                                indicatorTable["found"][unit] = indicatorTable["found"][unit] + 1
+                                unitButton.indicators[indicatorName]:Show()
+                            end
+                        else
+                            if indicatorTable["auras"][spellId] < indicatorTable["topOrder"][unit] then
+                                indicatorTable["topOrder"][unit] = indicatorTable["auras"][spellId]
+                                indicatorTable["top"][unit]["start"] = start
+                                indicatorTable["top"][unit]["duration"] = duration
+                                indicatorTable["top"][unit]["debuffType"] = debuffType
+                                indicatorTable["top"][unit]["texture"] = texture
+                                indicatorTable["top"][unit]["count"] = count
+                                indicatorTable["top"][unit]["refreshing"] = refreshing
+                            end
+                        end
+                    end
+                else -- debuff
+                    if indicatorTable["isIcons"] then
+                        if indicatorTable["found"][unit] <= indicatorTable["num"] then
+                            unitButton.indicators[indicatorName]:UpdateSize(indicatorTable["found"][unit])
+                            unitButton.indicators[indicatorName][indicatorTable["found"][unit]]:SetCooldown(start, duration, debuffType, texture, count, refreshing)
+                            indicatorTable["found"][unit] = indicatorTable["found"][unit] + 1
+                            unitButton.indicators[indicatorName]:Show()
+                        end
+                    else
+                        if  indicatorTable["auras"][spellId] < indicatorTable["topOrder"][unit] then
+                            indicatorTable["topOrder"][unit] = indicatorTable["auras"][spellId]
+                            indicatorTable["top"][unit]["start"] = start
+                            indicatorTable["top"][unit]["duration"] = duration
+                            indicatorTable["top"][unit]["debuffType"] = debuffType
+                            indicatorTable["top"][unit]["texture"] = texture
+                            indicatorTable["top"][unit]["count"] = count
+                            indicatorTable["top"][unit]["refreshing"] = refreshing
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+function I.ShowCustomIndicators(unit, unitButton, auraType)
+    for indicatorName, indicatorTable in pairs(customIndicators[auraType]) do
+        if enabledIndicators[indicatorName] and unitButton.indicators[indicatorName] then
+            if indicatorTable["isIcons"] then
+                for i = indicatorTable["found"][unit], 10 do
+                    unitButton.indicators[indicatorName][i]:Hide()
+                end
+                if indicatorTable["found"][unit] == 1 then
+                    unitButton.indicators[indicatorName]:Hide()
+                end
+            else
+                if indicatorTable["top"][unit]["start"] then
+                    unitButton.indicators[indicatorName]:SetCooldown(
+                        indicatorTable["top"][unit]["start"],
+                        indicatorTable["top"][unit]["duration"],
+                        indicatorTable["top"][unit]["debuffType"],
+                        indicatorTable["top"][unit]["texture"],
+                        indicatorTable["top"][unit]["count"],
+                        indicatorTable["top"][unit]["refreshing"])
+                else
+                    unitButton.indicators[indicatorName]:Hide()
+                end
+            end
+        end
+    end
+end
+]=]
